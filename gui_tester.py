@@ -32,8 +32,8 @@ class PersonTrackerGUI:
         self.source_frame_interval = None
         self.last_frame_time = None
         # Detection backend settings
-        self.detection_backend = tk.StringVar(value="Haar")  # 'Haar' or 'SSD'
-        self.conf_threshold = tk.DoubleVar(value=0.5)
+        self.detection_backend = tk.StringVar(value="YOLO")  # default to YOLO now
+        self.conf_threshold = tk.DoubleVar(value=0.1)
         self.dnn_net = None
         self.dnn_loaded = False
         self.last_backend_used = None
@@ -42,11 +42,10 @@ class PersonTrackerGUI:
         # YOLO backend (lazy loaded)
         self.yolo_model = None
         self.yolo_loaded = False
-        self.yolo_model_name = tk.StringVar(value="yolov8n.pt")  # nano model
+        self.yolo_model_name = tk.StringVar(value="yolov8n.pt")  # fixed single model
         self.yolo_frame_skip = 1
         self.yolo_import_error = None
-        self.yolo_model_variants = ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt"]
-        self.yolo_current_name = None  # Track which model is actually loaded
+        # Removed model variants; fixed to yolov8n.pt
         
         # Robot connection
         self.robot_connected = False
@@ -240,21 +239,16 @@ class PersonTrackerGUI:
         backend_combo = ttk.Combobox(detector_frame, values=["Haar", "SSD", "YOLO"], textvariable=self.detection_backend, state="readonly", width=10)
         backend_combo.grid(row=0, column=1, padx=5, pady=2, sticky='w')
 
-        ttk.Label(detector_frame, text="YOLO Model:").grid(row=1, column=0, sticky='w')
-        self.yolo_model_combo = ttk.Combobox(detector_frame, values=self.yolo_model_variants, textvariable=self.yolo_model_name, state="readonly", width=12)
-        self.yolo_model_combo.grid(row=1, column=1, padx=5, pady=2, sticky='w')
-        self.yolo_model_combo.bind("<<ComboboxSelected>>", self.on_yolo_model_change)
-
-        ttk.Label(detector_frame, text="Confidence:").grid(row=2, column=0, sticky='w')
+        ttk.Label(detector_frame, text="Confidence:").grid(row=1, column=0, sticky='w')
         conf_scale = ttk.Scale(detector_frame, from_=0.1, to=0.9, orient='horizontal', variable=self.conf_threshold)
-        conf_scale.grid(row=2, column=1, padx=5, pady=2, sticky='we')
+        conf_scale.grid(row=1, column=1, padx=5, pady=2, sticky='we')
 
         detector_frame.columnconfigure(1, weight=1)
 
-        ttk.Button(detector_frame, text="Download SSD Model", command=self.ensure_model_download).grid(row=3, column=0, columnspan=2, pady=4, sticky='we')
+        ttk.Button(detector_frame, text="Download SSD Model", command=self.ensure_model_download).grid(row=2, column=0, columnspan=2, pady=4, sticky='we')
 
-        self.detector_status_label = tk.Label(detector_frame, text="Backend: Haar", anchor='w')
-        self.detector_status_label.grid(row=4, column=0, columnspan=2, sticky='we')
+        self.detector_status_label = tk.Label(detector_frame, text="Backend: YOLO", anchor='w')
+        self.detector_status_label.grid(row=3, column=0, columnspan=2, sticky='we')
     
     def create_arrow_display(self):
         """Create arrow buttons for command visualization"""
@@ -861,28 +855,11 @@ class PersonTrackerGUI:
             pass
         return people
 
-    def on_yolo_model_change(self, event=None):
-        """Handle user changing YOLO model variant."""
-        # Force reload next time if different model picked
-        new_name = self.yolo_model_name.get()
-        if new_name != self.yolo_current_name:
-            self.yolo_loaded = False
-            self.yolo_model = None
-            # If YOLO currently selected backend, load immediately (non-blocking optional)
-            if self.detection_backend.get() == 'YOLO':
-                self.update_status(f"Switching to {new_name} ...")
-                self.load_yolo_model()
-        # Update status label soon
-        try:
-            self.update_stats(0.0, 0, False)
-        except Exception:
-            pass
-
     def load_yolo_model(self):
         """Load YOLO model using ultralytics package (lazy)."""
         model_name = self.yolo_model_name.get()
-        if self.yolo_loaded and self.yolo_current_name == model_name:
-            return  # already loaded same model
+        if self.yolo_loaded:
+            return
         try:
             from ultralytics import YOLO  # type: ignore
         except ImportError as e:
