@@ -8,6 +8,9 @@ import queue
 import os
 import numpy as np
 from datetime import datetime
+import webbrowser
+import threading as _threading
+import math
 
 class PersonTrackerGUI:
     def __init__(self, window):
@@ -28,6 +31,22 @@ class PersonTrackerGUI:
         self.source_fps = None
         self.source_frame_interval = None
         self.last_frame_time = None
+        # Detection backend settings
+        self.detection_backend = tk.StringVar(value="Haar")  # 'Haar' or 'SSD'
+        self.conf_threshold = tk.DoubleVar(value=0.5)
+        self.dnn_net = None
+        self.dnn_loaded = False
+        self.last_backend_used = None
+        self.frame_index = 0
+        self.ssd_frame_skip = 1  # Can raise to 2-3 on slow machines
+        # YOLO backend (lazy loaded)
+        self.yolo_model = None
+        self.yolo_loaded = False
+        self.yolo_model_name = tk.StringVar(value="yolov8n.pt")  # nano model
+        self.yolo_frame_skip = 1
+        self.yolo_import_error = None
+        self.yolo_model_variants = ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt"]
+        self.yolo_current_name = None  # Track which model is actually loaded
         
         # Robot connection
         self.robot_connected = False
@@ -212,6 +231,30 @@ class PersonTrackerGUI:
         
         for label in self.stats_labels.values():
             label.pack(anchor='w')
+
+        # Detector settings panel
+        detector_frame = ttk.LabelFrame(right_frame, text="Detector Settings", padding="10")
+        detector_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(detector_frame, text="Backend:").grid(row=0, column=0, sticky='w')
+        backend_combo = ttk.Combobox(detector_frame, values=["Haar", "SSD", "YOLO"], textvariable=self.detection_backend, state="readonly", width=10)
+        backend_combo.grid(row=0, column=1, padx=5, pady=2, sticky='w')
+
+        ttk.Label(detector_frame, text="YOLO Model:").grid(row=1, column=0, sticky='w')
+        self.yolo_model_combo = ttk.Combobox(detector_frame, values=self.yolo_model_variants, textvariable=self.yolo_model_name, state="readonly", width=12)
+        self.yolo_model_combo.grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        self.yolo_model_combo.bind("<<ComboboxSelected>>", self.on_yolo_model_change)
+
+        ttk.Label(detector_frame, text="Confidence:").grid(row=2, column=0, sticky='w')
+        conf_scale = ttk.Scale(detector_frame, from_=0.1, to=0.9, orient='horizontal', variable=self.conf_threshold)
+        conf_scale.grid(row=2, column=1, padx=5, pady=2, sticky='we')
+
+        detector_frame.columnconfigure(1, weight=1)
+
+        ttk.Button(detector_frame, text="Download SSD Model", command=self.ensure_model_download).grid(row=3, column=0, columnspan=2, pady=4, sticky='we')
+
+        self.detector_status_label = tk.Label(detector_frame, text="Backend: Haar", anchor='w')
+        self.detector_status_label.grid(row=4, column=0, columnspan=2, sticky='we')
     
     def create_arrow_display(self):
         """Create arrow buttons for command visualization"""
@@ -351,6 +394,7 @@ class PersonTrackerGUI:
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.update_status("Tracking started")
+        self.detector_status_label.config(text=f"Backend: {self.detection_backend.get()}")
     
     def stop_tracking(self):
         """Stop person tracking"""
@@ -378,9 +422,9 @@ class PersonTrackerGUI:
     
     def tracking_loop(self):
         """Main tracking loop (runs in separate thread)"""
-        # Simple person detection using Haar Cascade
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+        # Prepare detectors (lazy load)
+        face_cascade = None
+        body_cascade = None
         
         fps_time = time.time()
         
@@ -410,22 +454,72 @@ class PersonTrackerGUI:
             fps = 1.0 / (now2 - fps_time) if now2 - fps_time > 0 else 0
             fps_time = now2
             
-            # Resize frame for display
+            # Keep original for detection; make a resized copy for display
+            orig_h, orig_w = frame.shape[:2]
             display_frame = cv2.resize(frame, (640, 480))
+            disp_h, disp_w = display_frame.shape[:2]
             
-            # Convert to grayscale for detection
-            gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
+            # Select detector backend
+            backend = self.detection_backend.get()
+            if backend != self.last_backend_used:
+                # Reset / (re)load as needed
+                if backend == 'Haar':
+                    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                    body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+                elif backend == 'SSD':
+                    self.load_ssd_model()
+                elif backend == 'YOLO':
+                    self.load_yolo_model()
+                self.last_backend_used = backend
             
-            # Detect faces and bodies
-            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-            bodies = body_cascade.detectMultiScale(gray, 1.1, 3)
-            
-            # Combine detections
             people = []
-            for (x, y, w, h) in faces:
-                people.append((x, y - h, w, h * 3))  # Estimate body from face
-            for (x, y, w, h) in bodies:
-                people.append((x, y, w, h))
+            if backend == 'Haar':
+                if face_cascade is None or body_cascade is None:
+                    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                    body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+                gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
+                faces = []
+                bodies = []
+                try:
+                    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+                except Exception:
+                    pass
+                try:
+                    bodies = body_cascade.detectMultiScale(gray, 1.1, 3)
+                except Exception:
+                    pass
+                for (x, y, w, h) in faces:
+                    people.append((x, y - h, w, h * 3))
+                for (x, y, w, h) in bodies:
+                    people.append((x, y, w, h))
+            elif backend == 'SSD':
+                process_this = True
+                if self.ssd_frame_skip > 1:
+                    process_this = (self.frame_index % self.ssd_frame_skip == 0)
+                if process_this and self.dnn_net is not None and self.dnn_loaded:
+                    people = self.run_ssd(display_frame, self.conf_threshold.get())
+                self.frame_index += 1
+            elif backend == 'YOLO':
+                process_this = True
+                if self.yolo_frame_skip > 1:
+                    process_this = (self.frame_index % self.yolo_frame_skip == 0)
+                if process_this and self.yolo_loaded and self.yolo_model is not None:
+                    # Run on original frame for better accuracy
+                    yolo_people = self.run_yolo(frame, self.conf_threshold.get())
+                    # Scale boxes to display frame size if sizes differ
+                    if (orig_w, orig_h) != (disp_w, disp_h):
+                        scale_x = disp_w / orig_w
+                        scale_y = disp_h / orig_h
+                        for (x, y, w, h) in yolo_people:
+                            nx = int(x * scale_x)
+                            ny = int(y * scale_y)
+                            nw = int(w * scale_x)
+                            nh = int(h * scale_y)
+                            if nw > 4 and nh > 8:
+                                people.append((nx, ny, nw, nh))
+                    else:
+                        people = yolo_people
+                self.frame_index += 1
             
             # Select closest/largest person
             target_person = None
@@ -627,10 +721,227 @@ class PersonTrackerGUI:
             source_info = "File" if self.source_is_file else "Webcam"
             if self.source_is_file and self.source_fps:
                 source_info += f" ({self.source_fps:.1f} fps)"
+            backend = self.detection_backend.get()
+            status = f"Backend: {backend}"
+            if backend == 'SSD' and not self.dnn_loaded:
+                status += " (not loaded)"
+            if backend == 'YOLO':
+                if self.yolo_import_error:
+                    status += " (pip install ultralytics)"
+                elif not self.yolo_loaded:
+                    status += " (loading)"
+            self.detector_status_label.config(text=status)
             self.stats_labels['fps'].config(text=f"FPS (proc): {fps:.1f}")
             self.stats_labels['people'].config(text=f"People detected: {people_count}")
             self.stats_labels['tracking'].config(text=f"Tracking: {'Yes' if tracking else 'No'} | Source: {source_info}")
         self.window.after(0, _update)
+
+    def open_model_download(self):
+        """Open browser to download SSD model if missing"""
+        url = "https://drive.google.com/uc?export=download&id=0B3gersZ2cHIxRm5PMWRoTkdHdHc"
+        try:
+            webbrowser.open(url)
+        except Exception:
+            messagebox.showinfo("Download", f"Open this link manually:\n{url}")
+
+    def ensure_model_download(self):
+        """Ensure the SSD model file exists; if not, attempt automatic download."""
+        prototxt = os.path.join(os.getcwd(), 'MobileNetSSD_deploy.prototxt')
+        caffemodel = os.path.join(os.getcwd(), 'MobileNetSSD_deploy.caffemodel')
+        if os.path.exists(caffemodel) and os.path.getsize(caffemodel) > 1_000_000:
+            messagebox.showinfo("Model", "Model already present.")
+            return
+        # Ask user to proceed
+        if not messagebox.askyesno("Download Model", "Download MobileNetSSD_deploy.caffemodel now (~23MB)?"):
+            return
+        # Run in background thread
+        t = _threading.Thread(target=self._download_model_thread, args=(caffemodel,), daemon=True)
+        t.start()
+
+    def _download_model_thread(self, dest_path):
+        import requests
+        url = "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/MobileNetSSD_deploy.caffemodel"
+        # Fallback note: if this URL 404s, user must manual download from Google Drive
+        try:
+            self.update_status("Downloading SSD model...")
+            resp = requests.get(url, stream=True, timeout=30)
+            if resp.status_code != 200:
+                self.update_status("Download failed (status)")
+                messagebox.showwarning("Download Failed", f"HTTP {resp.status_code}. Opening browser for manual download.")
+                self.open_model_download()
+                return
+            total = int(resp.headers.get('Content-Length', 0))
+            downloaded = 0
+            chunk_size = 8192
+            tmp_path = dest_path + '.part'
+            with open(tmp_path, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = downloaded / total * 100
+                        if downloaded % (chunk_size * 25) == 0:
+                            self.update_status(f"Downloading SSD model... {pct:.1f}%")
+            # Basic size sanity check (>5MB)
+            if os.path.getsize(tmp_path) < 5_000_000:
+                os.remove(tmp_path)
+                self.update_status("Download corrupted")
+                messagebox.showerror("Download Error", "Downloaded file too small / corrupt.")
+                self.open_model_download()
+                return
+            # Rename to final
+            if os.path.exists(dest_path):
+                try:
+                    os.remove(dest_path)
+                except Exception:
+                    pass
+            os.replace(tmp_path, dest_path)
+            self.update_status("Model downloaded")
+            messagebox.showinfo("Model", "MobileNet SSD model downloaded successfully.")
+            # Attempt immediate load if SSD selected
+            if self.detection_backend.get() == 'SSD':
+                self.dnn_loaded = False
+                self.load_ssd_model()
+        except Exception as e:
+            self.update_status("Download failed")
+            messagebox.showerror("Download Failed", f"Automatic download failed: {e}\nOpening browser...")
+            self.open_model_download()
+
+    def load_ssd_model(self):
+        """Load MobileNet SSD model if available, else mark as not loaded."""
+        if self.dnn_loaded:
+            return
+        prototxt = os.path.join(os.getcwd(), 'MobileNetSSD_deploy.prototxt')
+        caffemodel = os.path.join(os.getcwd(), 'MobileNetSSD_deploy.caffemodel')
+        if not os.path.exists(prototxt) or not os.path.exists(caffemodel):
+            self.dnn_loaded = False
+            return
+        try:
+            self.dnn_net = cv2.dnn.readNetFromCaffe(prototxt, caffemodel)
+            # Prefer OpenCL if available for speed
+            try:
+                self.dnn_net.setPreferableBackend(cv2.dnn.DNN_BACKEND_DEFAULT)
+                self.dnn_net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            except Exception:
+                pass
+            self.dnn_loaded = True
+        except Exception as e:
+            print(f"Failed to load SSD model: {e}")
+            self.dnn_loaded = False
+
+    def run_ssd(self, frame, conf_threshold):
+        """Run SSD detection on frame and return list of (x,y,w,h) for persons only."""
+        people = []
+        try:
+            blob = cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), 127.5, swapRB=True, crop=False)
+            self.dnn_net.setInput(blob)
+            detections = self.dnn_net.forward()
+            (h, w) = frame.shape[:2]
+            # Class id for person in MobileNet SSD (VOC) is 15
+            for i in range(detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                if confidence < conf_threshold:
+                    continue
+                class_id = int(detections[0, 0, i, 1])
+                if class_id != 15:
+                    continue
+                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                (x1, y1, x2, y2) = box.astype("int")
+                x1 = max(0, x1); y1 = max(0, y1)
+                x2 = min(w-1, x2); y2 = min(h-1, y2)
+                bw = x2 - x1
+                bh = y2 - y1
+                if bw > 10 and bh > 20:
+                    people.append((x1, y1, bw, bh))
+        except Exception as e:
+            # On error fallback silently
+            # print(f"SSD error: {e}")
+            pass
+        return people
+
+    def on_yolo_model_change(self, event=None):
+        """Handle user changing YOLO model variant."""
+        # Force reload next time if different model picked
+        new_name = self.yolo_model_name.get()
+        if new_name != self.yolo_current_name:
+            self.yolo_loaded = False
+            self.yolo_model = None
+            # If YOLO currently selected backend, load immediately (non-blocking optional)
+            if self.detection_backend.get() == 'YOLO':
+                self.update_status(f"Switching to {new_name} ...")
+                self.load_yolo_model()
+        # Update status label soon
+        try:
+            self.update_stats(0.0, 0, False)
+        except Exception:
+            pass
+
+    def load_yolo_model(self):
+        """Load YOLO model using ultralytics package (lazy)."""
+        model_name = self.yolo_model_name.get()
+        if self.yolo_loaded and self.yolo_current_name == model_name:
+            return  # already loaded same model
+        try:
+            from ultralytics import YOLO  # type: ignore
+        except ImportError as e:
+            self.yolo_import_error = str(e)
+            self.yolo_loaded = False
+            # Notify user once
+            try:
+                messagebox.showwarning(
+                    "YOLO Not Installed",
+                    "Ultralytics YOLO not installed. Run: pip install ultralytics"
+                )
+            except Exception:
+                pass
+            return
+        try:
+            self.update_status(f"Loading YOLO model {model_name} ...")
+            self.yolo_model = YOLO(model_name)
+            self.yolo_loaded = True
+            self.yolo_current_name = model_name
+            self.yolo_import_error = None
+            self.update_status(f"YOLO model {model_name} loaded")
+        except Exception as e:
+            self.yolo_loaded = False
+            self.yolo_import_error = str(e)
+            self.update_status("YOLO load error")
+            try:
+                messagebox.showerror("YOLO Load Error", f"Failed to load YOLO model: {e}")
+            except Exception:
+                pass
+
+    def run_yolo(self, frame, conf_threshold):
+        """Run YOLO inference and extract person boxes."""
+        people = []
+        if not self.yolo_loaded or self.yolo_model is None:
+            return people
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = self.yolo_model.predict(rgb, verbose=False, imgsz=640)
+            if not results:
+                return people
+            res = results[0]
+            if hasattr(res, 'boxes') and res.boxes is not None:
+                for b in res.boxes:
+                    try:
+                        cls = int(b.cls[0]) if b.cls is not None else -1
+                        conf = float(b.conf[0]) if b.conf is not None else 0.0
+                        if cls != 0 or conf < conf_threshold:
+                            continue
+                        x1, y1, x2, y2 = b.xyxy[0].tolist()
+                        x1 = int(max(0, x1)); y1 = int(max(0, y1))
+                        x2 = int(min(frame.shape[1]-1, x2)); y2 = int(min(frame.shape[0]-1, y2))
+                        w = x2 - x1; h = y2 - y1
+                        if w > 10 and h > 20:
+                            people.append((x1, y1, w, h))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return people
     
     def on_closing(self):
         """Handle window closing"""
