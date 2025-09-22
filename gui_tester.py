@@ -245,6 +245,9 @@ class PersonTrackerGUI:
         ttk.Label(ip_frame, text="Robot IP:").pack(side=tk.LEFT)
         ttk.Entry(ip_frame, textvariable=self.robot_ip, width=15).pack(side=tk.LEFT, padx=5)
         
+        # Test connection button
+        ttk.Button(ip_frame, text="Test", command=self.test_robot_connection).pack(side=tk.LEFT, padx=5)
+        
         # Current command display
         command_frame = ttk.LabelFrame(right_frame, text="Current Command", padding="10")
         command_frame.pack(fill=tk.X, pady=5)
@@ -421,9 +424,57 @@ class PersonTrackerGUI:
         """Toggle robot connection"""
         self.robot_connected = self.robot_connected_var.get()
         if self.robot_connected:
-            self.update_status(f"Connected to robot at {self.robot_ip.get()}")
+            # Test connection to Raspberry Pi
+            self.test_robot_connection()
         else:
             self.update_status("Robot disconnected")
+    
+    def test_robot_connection(self):
+        """Test connection to Raspberry Pi server"""
+        def test_connection():
+            try:
+                import requests
+                url = f"http://{self.robot_ip.get()}:5000/"
+                response = requests.get(url, timeout=3.0)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    server_status = data.get('status', 'unknown')
+                    esp32_status = data.get('esp32_connected', False)
+                    
+                    def update_ui():
+                        status_msg = f"Connected to Pi - ESP32: {'✓' if esp32_status else '✗'}"
+                        self.update_status(status_msg)
+                        if not esp32_status:
+                            messagebox.showwarning(
+                                "ESP32 Not Connected", 
+                                f"Raspberry Pi is running but ESP32 is not connected.\n\n"
+                                f"Server Status: {server_status}\n"
+                                f"Check ESP32 Bluetooth pairing."
+                            )
+                    self.window.after(0, update_ui)
+                else:
+                    def update_ui():
+                        self.update_status(f"Pi connection failed: HTTP {response.status_code}")
+                    self.window.after(0, update_ui)
+                    
+            except requests.exceptions.Timeout:
+                def update_ui():
+                    self.update_status("Pi connection timeout")
+                    messagebox.showerror("Connection Timeout", f"Cannot reach Raspberry Pi at {self.robot_ip.get()}:5000\n\nCheck:\n• Pi is powered on\n• Correct IP address\n• Network connection")
+                self.window.after(0, update_ui)
+            except requests.exceptions.ConnectionError:
+                def update_ui():
+                    self.update_status("Pi connection refused")
+                    messagebox.showerror("Connection Refused", f"Raspberry Pi not responding at {self.robot_ip.get()}:5000\n\nCheck:\n• Server is running on Pi\n• Port 5000 is open\n• Firewall settings")
+                self.window.after(0, update_ui)
+            except Exception as e:
+                def update_ui():
+                    self.update_status(f"Pi test error: {str(e)[:30]}")
+                self.window.after(0, update_ui)
+        
+        threading.Thread(target=test_connection, daemon=True).start()
+        self.update_status(f"Testing connection to {self.robot_ip.get()}...")
     
     def start_tracking(self):
         """Start person tracking"""
@@ -874,27 +925,64 @@ class PersonTrackerGUI:
             self.send_command_to_robot(command)
     
     def send_command_to_robot(self, command):
-        """Send command to robot (simulated)"""
+        """Send command to robot via Raspberry Pi HTTP API"""
         try:
             if self.robot_connected:
-                # In real implementation, this would send HTTP request
-                # For testing, just log it
-                print(f"Sending command '{command}' to robot at {self.robot_ip.get()}")
-                
-                # Simulate sending with threading to avoid blocking
-                def simulate_send():
-                    import requests
+                # Real implementation - send HTTP request to Raspberry Pi
+                def send_http_command():
                     try:
+                        import requests
                         url = f"http://{self.robot_ip.get()}:5000/move"
-                        response = requests.post(url, json={'command': command}, timeout=0.5)
-                        print(f"Robot response: {response.status_code}")
-                    except:
-                        pass  # Ignore errors in simulation
+                        payload = {'command': command}
+                        headers = {'Content-Type': 'application/json'}
+                        
+                        response = requests.post(
+                            url, 
+                            json=payload, 
+                            headers=headers, 
+                            timeout=2.0
+                        )
+                        
+                        if response.status_code == 200:
+                            result = response.json()
+                            print(f"✓ Command '{command}' sent successfully")
+                            print(f"  Response: {result.get('status', 'unknown')}")
+                            
+                            # Update status in main thread
+                            def update_ui():
+                                self.update_status(f"Command sent: {command}")
+                            self.window.after(0, update_ui)
+                        else:
+                            print(f"❌ HTTP Error {response.status_code}: {response.text}")
+                            def update_ui():
+                                self.update_status(f"Send failed: HTTP {response.status_code}")
+                            self.window.after(0, update_ui)
+                            
+                    except requests.exceptions.Timeout:
+                        print(f"⏱️ Timeout sending command '{command}' to {self.robot_ip.get()}")
+                        def update_ui():
+                            self.update_status("Send timeout - check Pi connection")
+                        self.window.after(0, update_ui)
+                    except requests.exceptions.ConnectionError:
+                        print(f"🔌 Connection error to {self.robot_ip.get()}")
+                        def update_ui():
+                            self.update_status("Connection error - check Pi IP")
+                        self.window.after(0, update_ui)
+                    except Exception as e:
+                        print(f"❌ Error sending command: {e}")
+                        def update_ui():
+                            self.update_status(f"Send error: {str(e)[:30]}")
+                        self.window.after(0, update_ui)
                 
-                # Uncomment to actually send commands
-                # threading.Thread(target=simulate_send, daemon=True).start()
+                # Send command in background thread to avoid blocking UI
+                threading.Thread(target=send_http_command, daemon=True).start()
+                
+                # Also log locally for debugging
+                print(f"📤 Sending command '{command}' to Raspberry Pi at {self.robot_ip.get()}")
+                
         except Exception as e:
-            print(f"Error sending command: {e}")
+            print(f"❌ Error in send_command_to_robot: {e}")
+            self.update_status(f"Send setup error: {str(e)[:30]}")
     
     def update_status(self, message):
         """Update status bar"""
