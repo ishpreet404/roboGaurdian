@@ -23,7 +23,9 @@ class PersonTrackerGUI:
         self.cap = None
         self.tracking = False
         self.tracking_thread = None
-        self.frame_queue = queue.Queue(maxsize=2)
+        self.frame_queue = queue.Queue(maxsize=1)  # Reduced to 1 for minimal latency
+        self.latest_frame = None
+        self.frame_lock = threading.Lock()
         self.command_history = []
         self.current_command = 'S'
         # Source metadata (for video file playback timing)
@@ -47,6 +49,23 @@ class PersonTrackerGUI:
         self.yolo_import_error = None
         # Removed model variants; fixed to yolov8n.pt
         
+        # GPU/Device settings
+        self.device = tk.StringVar(value="auto")  # auto, cpu, cuda
+        self.available_devices = self.detect_available_devices()
+        self.current_device = "cpu"  # Will be set during model loading
+        
+        # Enhanced inference settings for accuracy
+        self.inference_size = tk.IntVar(value=640)  # YOLO input size
+        self.nms_threshold = tk.DoubleVar(value=0.45)  # Non-max suppression
+        self.max_detections = tk.IntVar(value=300)  # Max detections per image
+        
+        # Latency optimization
+        self.frame_skip_count = 0
+        self.adaptive_skip = 1  # Start with processing every frame
+        self.last_process_time = time.time()
+        self.capture_fps = 0
+        self.process_fps = 0
+        
         # Robot connection
         self.robot_connected = False
         self.robot_ip = tk.StringVar(value="192.168.1.100")
@@ -54,12 +73,43 @@ class PersonTrackerGUI:
         # Video source
         self.video_source = tk.IntVar(value=0)
         self.video_file = tk.StringVar()
+        self.network_stream = tk.StringVar(value="http://10.214.108.26:8080/?action=stream")
         
         # Create GUI elements
         self.create_widgets()
         
         # Start update loop
         self.update_frame()
+    
+    def detect_available_devices(self):
+        """Detect available compute devices"""
+        devices = ["cpu"]
+        
+        try:
+            import torch
+            if torch.cuda.is_available():
+                devices.append("cuda")
+                # Add specific GPU devices
+                for i in range(torch.cuda.device_count()):
+                    devices.append(f"cuda:{i}")
+        except ImportError:
+            pass
+        
+        return devices
+    
+    def get_optimal_device(self):
+        """Get the optimal device for inference"""
+        if self.device.get() == "auto":
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    return "cuda"
+                else:
+                    return "cpu"
+            except ImportError:
+                return "cpu"
+        else:
+            return self.device.get()
         
     def create_widgets(self):
         """Create all GUI widgets"""
@@ -145,17 +195,36 @@ class PersonTrackerGUI:
             value=1
         ).pack(anchor='w')
         
+        ttk.Radiobutton(
+            source_frame, 
+            text="Network Stream", 
+            variable=self.video_source, 
+            value=2
+        ).pack(anchor='w')
+        
         file_frame = ttk.Frame(source_frame)
         file_frame.pack(fill=tk.X, pady=5)
         
-        self.file_entry = ttk.Entry(file_frame, textvariable=self.video_file)
+        ttk.Label(file_frame, text="File:").pack(anchor='w')
+        file_entry_frame = ttk.Frame(file_frame)
+        file_entry_frame.pack(fill=tk.X, pady=2)
+        
+        self.file_entry = ttk.Entry(file_entry_frame, textvariable=self.video_file)
         self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         ttk.Button(
-            file_frame,
+            file_entry_frame,
             text="Browse",
             command=self.browse_video_file
         ).pack(side=tk.RIGHT, padx=5)
+        
+        # Network stream URL
+        stream_frame = ttk.Frame(source_frame)
+        stream_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(stream_frame, text="Stream URL:").pack(anchor='w')
+        self.stream_entry = ttk.Entry(stream_frame, textvariable=self.network_stream)
+        self.stream_entry.pack(fill=tk.X, pady=2)
         
         # Robot connection
         robot_frame = ttk.LabelFrame(right_frame, text="Robot Connection", padding="10")
@@ -225,7 +294,9 @@ class PersonTrackerGUI:
         self.stats_labels = {
             'fps': tk.Label(stats_frame, text="FPS: 0.0"),
             'people': tk.Label(stats_frame, text="People detected: 0"),
-            'tracking': tk.Label(stats_frame, text="Tracking: No")
+            'tracking': tk.Label(stats_frame, text="Tracking: No"),
+            'latency': tk.Label(stats_frame, text="Processing: Every frame"),
+            'device': tk.Label(stats_frame, text="Device: CPU")
         }
         
         for label in self.stats_labels.values():
@@ -239,16 +310,27 @@ class PersonTrackerGUI:
         backend_combo = ttk.Combobox(detector_frame, values=["Haar", "SSD", "YOLO"], textvariable=self.detection_backend, state="readonly", width=10)
         backend_combo.grid(row=0, column=1, padx=5, pady=2, sticky='w')
 
-        ttk.Label(detector_frame, text="Confidence:").grid(row=1, column=0, sticky='w')
+        ttk.Label(detector_frame, text="Device:").grid(row=1, column=0, sticky='w')
+        device_combo = ttk.Combobox(detector_frame, values=self.available_devices, textvariable=self.device, state="readonly", width=10)
+        device_combo.grid(row=1, column=1, padx=5, pady=2, sticky='w')
+        device_combo.bind('<<ComboboxSelected>>', self.on_device_change)
+
+        ttk.Label(detector_frame, text="Confidence:").grid(row=2, column=0, sticky='w')
         conf_scale = ttk.Scale(detector_frame, from_=0.1, to=0.9, orient='horizontal', variable=self.conf_threshold)
-        conf_scale.grid(row=1, column=1, padx=5, pady=2, sticky='we')
+        conf_scale.grid(row=2, column=1, padx=5, pady=2, sticky='we')
+
+        ttk.Label(detector_frame, text="Input Size:").grid(row=3, column=0, sticky='w')
+        size_combo = ttk.Combobox(detector_frame, values=[320, 416, 512, 640, 832, 1024], textvariable=self.inference_size, state="readonly", width=10)
+        size_combo.grid(row=3, column=1, padx=5, pady=2, sticky='w')
+        size_combo.bind('<<ComboboxSelected>>', self.on_inference_settings_change)
 
         detector_frame.columnconfigure(1, weight=1)
 
-        ttk.Button(detector_frame, text="Download SSD Model", command=self.ensure_model_download).grid(row=2, column=0, columnspan=2, pady=4, sticky='we')
+        ttk.Button(detector_frame, text="Download SSD Model", command=self.ensure_model_download).grid(row=4, column=0, columnspan=2, pady=4, sticky='we')
+        ttk.Button(detector_frame, text="Install GPU PyTorch", command=self.install_gpu_pytorch).grid(row=5, column=0, columnspan=2, pady=2, sticky='we')
 
         self.detector_status_label = tk.Label(detector_frame, text="Backend: YOLO", anchor='w')
-        self.detector_status_label.grid(row=3, column=0, columnspan=2, sticky='we')
+        self.detector_status_label.grid(row=6, column=0, columnspan=2, sticky='we')
     
     def create_arrow_display(self):
         """Create arrow buttons for command visualization"""
@@ -296,6 +378,45 @@ class PersonTrackerGUI:
         if filename:
             self.video_file.set(filename)
     
+    def on_device_change(self, event=None):
+        """Handle device selection change"""
+        if self.yolo_loaded:
+            # Force reload of model with new device
+            self.yolo_loaded = False
+            self.yolo_model = None
+            if self.tracking:
+                # Reload will happen automatically in tracking loop
+                self.update_status(f"Switching to device: {self.device.get()}")
+    
+    def on_inference_settings_change(self, event=None):
+        """Handle inference settings change"""
+        if self.yolo_loaded:
+            # Settings will be applied on next inference
+            self.update_status(f"Updated inference size: {self.inference_size.get()}")
+    
+    def install_gpu_pytorch(self):
+        """Guide user to install GPU-enabled PyTorch"""
+        import webbrowser
+        try:
+            webbrowser.open("https://pytorch.org/get-started/locally/")
+            messagebox.showinfo(
+                "Install GPU PyTorch",
+                "Opening PyTorch installation page.\n\n"
+                "For CUDA 11.8:\n"
+                "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118\n\n"
+                "For CUDA 12.1:\n"
+                "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121\n\n"
+                "Restart the application after installation."
+            )
+        except Exception:
+            messagebox.showinfo(
+                "Install GPU PyTorch",
+                "Visit: https://pytorch.org/get-started/locally/\n\n"
+                "For CUDA support, run:\n"
+                "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118\n\n"
+                "Restart the application after installation."
+            )
+    
     def toggle_robot_connection(self):
         """Toggle robot connection"""
         self.robot_connected = self.robot_connected_var.get()
@@ -313,12 +434,18 @@ class PersonTrackerGUI:
         if self.video_source.get() == 0:
             source = 0  # Webcam
             self.source_is_file = False
-        else:
+        elif self.video_source.get() == 1:
             source = self.video_file.get()
             if not source or not os.path.exists(source):
                 messagebox.showerror("Error", "Please select a valid video file")
                 return
             self.source_is_file = True
+        else:  # Network stream
+            source = self.network_stream.get()
+            if not source:
+                messagebox.showerror("Error", "Please enter a valid stream URL")
+                return
+            self.source_is_file = False  # Treat like webcam for timing
         
         # Open video capture
         # On Windows, using CAP_DSHOW improves reliability with some webcams
@@ -332,7 +459,7 @@ class PersonTrackerGUI:
             cap = cv2.VideoCapture(source)
         
         if not cap.isOpened():
-            messagebox.showerror("Error", "Failed to open video source")
+            messagebox.showerror("Error", f"Failed to open video source: {source}")
             return
         
         # Try to set reasonable defaults
@@ -340,9 +467,20 @@ class PersonTrackerGUI:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize webcam buffer too
             # Give the camera a brief moment to warm up
             time.sleep(0.3)
             # Estimate FPS for webcam later dynamically
+            self.source_fps = None
+            self.source_frame_interval = None
+        elif self.video_source.get() == 2:  # Network stream
+            # For network streams, don't try to set properties that might not be supported
+            # Optimize for low latency
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer
+                cap.set(cv2.CAP_PROP_FPS, 30)  # Try to maintain reasonable FPS
+            except Exception:
+                pass
             self.source_fps = None
             self.source_frame_interval = None
         
@@ -372,12 +510,18 @@ class PersonTrackerGUI:
                 self.source_frame_interval = 1.0 / 30.0
         self.last_frame_time = None
         
-        # Clear any leftover frames
+        # Clear any leftover frames and reset counters
         while not self.frame_queue.empty():
             try:
                 self.frame_queue.get_nowait()
             except Exception:
                 break
+        
+        with self.frame_lock:
+            self.latest_frame = None
+        
+        self.frame_skip_count = 0
+        self.adaptive_skip = 1
         
         # Start tracking
         self.tracking = True
@@ -421,99 +565,121 @@ class PersonTrackerGUI:
         body_cascade = None
         
         fps_time = time.time()
+        frame_count = 0
         
         while self.tracking and self.cap and self.cap.isOpened():
+            frame_start = time.time()
+            
+            # Capture frame with minimal buffering
             ret, frame = self.cap.read()
             if not ret:
                 if self.video_source.get() == 1:  # Video file
                     # Loop video
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
+                elif self.video_source.get() == 2:  # Network stream
+                    # Try to reconnect to stream
+                    print("Stream disconnected, attempting to reconnect...")
+                    time.sleep(1)
+                    continue
                 else:
                     break
-            # Throttle playback for file sources to original FPS
-            if self.source_is_file and self.source_frame_interval:
-                now = time.time()
-                if self.last_frame_time is None:
-                    self.last_frame_time = now
-                else:
-                    elapsed = now - self.last_frame_time
-                    remaining = self.source_frame_interval - elapsed
-                    if remaining > 0:
-                        time.sleep(min(remaining, 0.05))
-                    self.last_frame_time = time.time()
             
-            # Calculate FPS
-            now2 = time.time()
-            fps = 1.0 / (now2 - fps_time) if now2 - fps_time > 0 else 0
-            fps_time = now2
+            # For network streams, clear any additional buffered frames to reduce latency
+            if self.video_source.get() == 2:
+                # Attempt to read additional frames to clear buffer
+                for _ in range(3):
+                    ret_extra, frame_extra = self.cap.read()
+                    if ret_extra and frame_extra is not None:
+                        frame = frame_extra  # Use the latest frame
+                    else:
+                        break
+            
+            frame_count += 1
+            
+            # Calculate capture FPS
+            now = time.time()
+            if frame_count % 10 == 0:  # Update every 10 frames
+                self.capture_fps = 10.0 / (now - fps_time) if now - fps_time > 0 else 0
+                fps_time = now
             
             # Keep original for detection; make a resized copy for display
             orig_h, orig_w = frame.shape[:2]
             display_frame = cv2.resize(frame, (640, 480))
             disp_h, disp_w = display_frame.shape[:2]
             
-            # Select detector backend
-            backend = self.detection_backend.get()
-            if backend != self.last_backend_used:
-                # Reset / (re)load as needed
-                if backend == 'Haar':
-                    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-                    body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
-                elif backend == 'SSD':
-                    self.load_ssd_model()
-                elif backend == 'YOLO':
-                    self.load_yolo_model()
-                self.last_backend_used = backend
+            # Adaptive frame skipping for processing
+            should_process = (self.frame_skip_count % self.adaptive_skip == 0)
+            self.frame_skip_count += 1
             
             people = []
-            if backend == 'Haar':
-                if face_cascade is None or body_cascade is None:
-                    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-                    body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
-                gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
-                faces = []
-                bodies = []
-                try:
-                    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-                except Exception:
-                    pass
-                try:
-                    bodies = body_cascade.detectMultiScale(gray, 1.1, 3)
-                except Exception:
-                    pass
-                for (x, y, w, h) in faces:
-                    people.append((x, y - h, w, h * 3))
-                for (x, y, w, h) in bodies:
-                    people.append((x, y, w, h))
-            elif backend == 'SSD':
-                process_this = True
-                if self.ssd_frame_skip > 1:
-                    process_this = (self.frame_index % self.ssd_frame_skip == 0)
-                if process_this and self.dnn_net is not None and self.dnn_loaded:
-                    people = self.run_ssd(display_frame, self.conf_threshold.get())
-                self.frame_index += 1
-            elif backend == 'YOLO':
-                process_this = True
-                if self.yolo_frame_skip > 1:
-                    process_this = (self.frame_index % self.yolo_frame_skip == 0)
-                if process_this and self.yolo_loaded and self.yolo_model is not None:
-                    # Run on original frame for better accuracy
-                    yolo_people = self.run_yolo(frame, self.conf_threshold.get())
-                    # Scale boxes to display frame size if sizes differ
-                    if (orig_w, orig_h) != (disp_w, disp_h):
-                        scale_x = disp_w / orig_w
-                        scale_y = disp_h / orig_h
-                        for (x, y, w, h) in yolo_people:
-                            nx = int(x * scale_x)
-                            ny = int(y * scale_y)
-                            nw = int(w * scale_x)
-                            nh = int(h * scale_y)
-                            if nw > 4 and nh > 8:
-                                people.append((nx, ny, nw, nh))
-                    else:
-                        people = yolo_people
-                self.frame_index += 1
+            if should_process:
+                process_start = time.time()
+                
+                # Select detector backend
+                backend = self.detection_backend.get()
+                if backend != self.last_backend_used:
+                    # Reset / (re)load as needed
+                    if backend == 'Haar':
+                        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                        body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+                    elif backend == 'SSD':
+                        self.load_ssd_model()
+                    elif backend == 'YOLO':
+                        self.load_yolo_model()
+                    self.last_backend_used = backend
+                
+                if backend == 'Haar':
+                    if face_cascade is None or body_cascade is None:
+                        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                        body_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fullbody.xml')
+                    gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
+                    faces = []
+                    bodies = []
+                    try:
+                        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+                    except Exception:
+                        pass
+                    try:
+                        bodies = body_cascade.detectMultiScale(gray, 1.1, 3)
+                    except Exception:
+                        pass
+                    for (x, y, w, h) in faces:
+                        people.append((x, y - h, w, h * 3))
+                    for (x, y, w, h) in bodies:
+                        people.append((x, y, w, h))
+                elif backend == 'SSD':
+                    if self.dnn_net is not None and self.dnn_loaded:
+                        people = self.run_ssd(display_frame, self.conf_threshold.get())
+                elif backend == 'YOLO':
+                    if self.yolo_loaded and self.yolo_model is not None:
+                        # Run on original frame for better accuracy
+                        yolo_people = self.run_yolo(frame, self.conf_threshold.get())
+                        # Scale boxes to display frame size if sizes differ
+                        if (orig_w, orig_h) != (disp_w, disp_h):
+                            scale_x = disp_w / orig_w
+                            scale_y = disp_h / orig_h
+                            for (x, y, w, h) in yolo_people:
+                                nx = int(x * scale_x)
+                                ny = int(y * scale_y)
+                                nw = int(w * scale_x)
+                                nh = int(h * scale_y)
+                                if nw > 4 and nh > 8:
+                                    people.append((nx, ny, nw, nh))
+                        else:
+                            people = yolo_people
+                
+                process_time = time.time() - process_start
+                
+                # Adaptive frame skipping based on processing time
+                if process_time > 0.05:  # If processing takes > 50ms
+                    self.adaptive_skip = min(3, self.adaptive_skip + 1)
+                elif process_time < 0.02:  # If processing is fast < 20ms
+                    self.adaptive_skip = max(1, self.adaptive_skip - 1)
+                
+                # Calculate processing FPS
+                self.process_fps = 1.0 / process_time if process_time > 0 else 0
+                self.last_process_time = time.time()
             
             # Select closest/largest person
             target_person = None
@@ -526,27 +692,29 @@ class PersonTrackerGUI:
             command = self.calculate_command(target_person, display_frame.shape[1])
             
             # Draw visualization
-            display_frame = self.draw_tracking_info(display_frame, people, target_person, command, fps)
+            total_fps = self.capture_fps
+            display_frame = self.draw_tracking_info(display_frame, people, target_person, command, total_fps)
             
             # Update statistics
-            self.update_stats(fps, len(people), target_person is not None)
+            self.update_stats(total_fps, len(people), target_person is not None)
             
-            # Put frame in queue for display
+            # Store latest frame for display (non-blocking)
+            with self.frame_lock:
+                self.latest_frame = display_frame.copy()
+            
+            # Put frame in queue for display (drop if full)
             try:
+                if self.frame_queue.full():
+                    try:
+                        self.frame_queue.get_nowait()  # Drop old frame
+                    except Exception:
+                        pass
                 self.frame_queue.put_nowait(display_frame)
             except queue.Full:
-                # Drop oldest and insert newest to keep UI fresh
-                try:
-                    self.frame_queue.get_nowait()
-                except Exception:
-                    pass
-                try:
-                    self.frame_queue.put_nowait(display_frame)
-                except Exception:
-                    pass
+                pass  # Just drop the frame if queue is full
             
-            # Small delay to avoid overwhelming the UI thread
-            time.sleep(0.01)
+            # Minimal delay to prevent overwhelming
+            time.sleep(0.001)
     
     def calculate_command(self, person, frame_width):
         """Calculate movement command based on person position"""
@@ -603,40 +771,63 @@ class PersonTrackerGUI:
         cv2.line(frame, (center_x + threshold, 0), (center_x + threshold, frame.shape[0]), (255, 0, 0), 1)
         
         # Draw status info
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Command: {command}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"People: {len(people)}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(frame, f"Capture FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, f"Command: {command}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(frame, f"People: {len(people)}", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        
+        # Show processing optimization info
+        if hasattr(self, 'adaptive_skip'):
+            cv2.putText(frame, f"Skip: 1/{self.adaptive_skip}", (10, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        
+        # Show device info for YOLO
+        if hasattr(self, 'current_device') and self.detection_backend.get() == 'YOLO':
+            device_color = (0, 255, 255) if self.current_device.startswith('cuda') else (255, 255, 0)
+            cv2.putText(frame, f"Device: {self.current_device.upper()}", (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.5, device_color, 1)
         
         return frame
     
     def update_frame(self):
         """Update video frame in GUI"""
         try:
+            frame = None
+            
+            # Try to get the latest frame from queue (non-blocking)
             if not self.frame_queue.empty():
-                # Non-blocking read from queue so UI stays responsive
                 try:
                     frame = self.frame_queue.get_nowait()
+                    # Clear any additional frames to stay current
+                    while not self.frame_queue.empty():
+                        try:
+                            frame = self.frame_queue.get_nowait()
+                        except Exception:
+                            break
                 except Exception:
                     frame = None
+            
+            # Fallback to stored latest frame if queue is empty
+            if frame is None:
+                with self.frame_lock:
+                    if self.latest_frame is not None:
+                        frame = self.latest_frame.copy()
+            
+            if frame is not None:
+                # Convert frame to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
-                if frame is not None:
-                    # Convert frame to RGB
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
-                    # Convert to PIL Image
-                    image = Image.fromarray(frame_rgb)
-                    
-                    # Convert to PhotoImage
-                    photo = ImageTk.PhotoImage(image=image)
-                    
-                    # Update label (keep a reference to prevent GC)
-                    self.video_label.config(image=photo)
-                    self.video_label.image = photo
+                # Convert to PIL Image
+                image = Image.fromarray(frame_rgb)
+                
+                # Convert to PhotoImage
+                photo = ImageTk.PhotoImage(image=image)
+                
+                # Update label (keep a reference to prevent GC)
+                self.video_label.config(image=photo)
+                self.video_label.image = photo
         except Exception as e:
             print(f"Error updating frame: {e}")
         
-        # Schedule next update
-        self.window.after(33, self.update_frame)
+        # Schedule next update with faster refresh for lower latency
+        self.window.after(16, self.update_frame)  # ~60 FPS UI refresh
     
     def update_command(self, command):
         """Update current command and display"""
@@ -712,9 +903,15 @@ class PersonTrackerGUI:
     def update_stats(self, fps, people_count, tracking):
         """Update statistics display"""
         def _update():
-            source_info = "File" if self.source_is_file else "Webcam"
-            if self.source_is_file and self.source_fps:
-                source_info += f" ({self.source_fps:.1f} fps)"
+            if self.video_source.get() == 0:
+                source_info = "Webcam"
+            elif self.video_source.get() == 1:
+                source_info = "File"
+                if self.source_is_file and self.source_fps:
+                    source_info += f" ({self.source_fps:.1f} fps)"
+            else:
+                source_info = "Network Stream"
+            
             backend = self.detection_backend.get()
             status = f"Backend: {backend}"
             if backend == 'SSD' and not self.dnn_loaded:
@@ -724,10 +921,31 @@ class PersonTrackerGUI:
                     status += " (pip install ultralytics)"
                 elif not self.yolo_loaded:
                     status += " (loading)"
+                else:
+                    status += f" ({self.inference_size.get()}px)"
             self.detector_status_label.config(text=status)
-            self.stats_labels['fps'].config(text=f"FPS (proc): {fps:.1f}")
+            self.stats_labels['fps'].config(text=f"Capture FPS: {fps:.1f}")
             self.stats_labels['people'].config(text=f"People detected: {people_count}")
             self.stats_labels['tracking'].config(text=f"Tracking: {'Yes' if tracking else 'No'} | Source: {source_info}")
+            
+            # Show processing optimization info
+            if hasattr(self, 'adaptive_skip'):
+                skip_text = f"Processing: 1/{self.adaptive_skip} frames"
+                if hasattr(self, 'process_fps') and self.process_fps > 0:
+                    skip_text += f" ({self.process_fps:.1f} proc/s)"
+                self.stats_labels['latency'].config(text=skip_text)
+            
+            # Show device info
+            device_text = f"Device: {self.current_device.upper()}"
+            try:
+                if self.current_device.startswith('cuda'):
+                    import torch
+                    if torch.cuda.is_available():
+                        gpu_name = torch.cuda.get_device_name(0)
+                        device_text += f" ({gpu_name[:20]}...)" if len(gpu_name) > 20 else f" ({gpu_name})"
+            except:
+                pass
+            self.stats_labels['device'].config(text=device_text)
         self.window.after(0, _update)
 
     def open_model_download(self):
@@ -856,7 +1074,7 @@ class PersonTrackerGUI:
         return people
 
     def load_yolo_model(self):
-        """Load YOLO model using ultralytics package (lazy)."""
+        """Load YOLO model using ultralytics package with GPU support (lazy)."""
         model_name = self.yolo_model_name.get()
         if self.yolo_loaded:
             return
@@ -876,14 +1094,38 @@ class PersonTrackerGUI:
             return
         try:
             self.update_status(f"Loading YOLO model {model_name} ...")
+            
+            # Load model
             self.yolo_model = YOLO(model_name)
+            
+            # Get optimal device
+            target_device = self.get_optimal_device()
+            self.current_device = target_device
+            
+            # Move model to device if supported
+            try:
+                if hasattr(self.yolo_model, 'to'):
+                    self.yolo_model.to(target_device)
+                elif hasattr(self.yolo_model.model, 'to'):
+                    self.yolo_model.model.to(target_device)
+                else:
+                    # Ultralytics handles device automatically
+                    pass
+            except Exception as e:
+                print(f"Device move warning: {e}")
+                self.current_device = "cpu"
+            
             self.yolo_loaded = True
             self.yolo_current_name = model_name
             self.yolo_import_error = None
-            self.update_status(f"YOLO model {model_name} loaded")
+            
+            device_info = f"on {self.current_device.upper()}" if self.current_device != "cpu" else ""
+            self.update_status(f"YOLO model {model_name} loaded {device_info}")
+            
         except Exception as e:
             self.yolo_loaded = False
             self.yolo_import_error = str(e)
+            self.current_device = "cpu"
             self.update_status("YOLO load error")
             try:
                 messagebox.showerror("YOLO Load Error", f"Failed to load YOLO model: {e}")
@@ -891,32 +1133,56 @@ class PersonTrackerGUI:
                 pass
 
     def run_yolo(self, frame, conf_threshold):
-        """Run YOLO inference and extract person boxes."""
+        """Run YOLO inference with enhanced parameters for accuracy."""
         people = []
         if not self.yolo_loaded or self.yolo_model is None:
             return people
         try:
+            # Convert BGR to RGB for YOLO
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = self.yolo_model.predict(rgb, verbose=False, imgsz=640)
+            
+            # Get inference parameters
+            input_size = self.inference_size.get()
+            nms_threshold = self.nms_threshold.get()
+            max_det = self.max_detections.get()
+            
+            # Run inference with enhanced parameters
+            results = self.yolo_model.predict(
+                rgb, 
+                verbose=False, 
+                imgsz=input_size,
+                conf=conf_threshold,
+                iou=nms_threshold,
+                max_det=max_det,
+                device=self.current_device,
+                half=self.current_device.startswith('cuda'),  # Use half precision on GPU
+                augment=False,  # Disable test-time augmentation for speed
+                agnostic_nms=False,  # Use class-specific NMS
+                retina_masks=False  # Disable if not using segmentation
+            )
+            
             if not results:
                 return people
             res = results[0]
+            
             if hasattr(res, 'boxes') and res.boxes is not None:
                 for b in res.boxes:
                     try:
                         cls = int(b.cls[0]) if b.cls is not None else -1
                         conf = float(b.conf[0]) if b.conf is not None else 0.0
+                        # Class 0 is person in COCO dataset
                         if cls != 0 or conf < conf_threshold:
                             continue
                         x1, y1, x2, y2 = b.xyxy[0].tolist()
                         x1 = int(max(0, x1)); y1 = int(max(0, y1))
                         x2 = int(min(frame.shape[1]-1, x2)); y2 = int(min(frame.shape[0]-1, y2))
                         w = x2 - x1; h = y2 - y1
-                        if w > 10 and h > 20:
+                        if w > 10 and h > 20:  # Minimum size filter
                             people.append((x1, y1, w, h))
                     except Exception:
                         continue
-        except Exception:
+        except Exception as e:
+            print(f"YOLO inference error: {e}")
             pass
         return people
     
