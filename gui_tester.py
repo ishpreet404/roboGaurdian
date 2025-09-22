@@ -68,12 +68,12 @@ class PersonTrackerGUI:
         
         # Robot connection
         self.robot_connected = False
-        self.robot_ip = tk.StringVar(value="192.168.1.100")
+        self.robot_ip = tk.StringVar(value="10.214.108.26")
         
         # Video source
         self.video_source = tk.IntVar(value=0)
         self.video_file = tk.StringVar()
-        self.network_stream = tk.StringVar(value="http://10.214.108.26:8080/?action=stream")
+        self.network_stream = tk.StringVar(value="http://10.214.108.26:5000/?action=stream")
         
         # Create GUI elements
         self.create_widgets()

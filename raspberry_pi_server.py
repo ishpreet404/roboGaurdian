@@ -63,7 +63,7 @@ class RobotCommandServer:
         self.app = Flask(__name__)
         self.camera = None
         self.bt_socket = None
-        self.esp32_address = None  # Will be set during pairing
+        self.esp32_address = "1C:69:20:A4:30:2A"  # BT_CAR_32 MAC address
         self.last_command = 'S'
         self.command_count = 0
         self.esp32_connected = False
@@ -281,26 +281,62 @@ class RobotCommandServer:
         cv2.putText(frame, timestamp, (500, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     def connect_bluetooth(self, esp32_address):
-        """Connect to ESP32 via Bluetooth"""
+        """Connect to ESP32 via Bluetooth with detailed error handling"""
         try:
             if self.bt_socket:
-                self.bt_socket.close()
+                try:
+                    self.bt_socket.close()
+                except:
+                    pass
             
-            logger.info(f"Connecting to ESP32 at {esp32_address}")
+            logger.info(f"🔗 Attempting Bluetooth connection to {esp32_address}")
+            
+            # Create socket with timeout
             self.bt_socket = BluetoothSocket(RFCOMM)
+            self.bt_socket.settimeout(15)  # 15 second timeout
+            
+            # Attempt connection
+            logger.info(f"📞 Connecting to channel 1...")
             self.bt_socket.connect((esp32_address, 1))  # Channel 1
+            
             self.esp32_address = esp32_address
             self.esp32_connected = True
             
-            logger.info(f"Successfully connected to ESP32: {esp32_address}")
+            logger.info(f"✅ Successfully connected to ESP32: {esp32_address}")
             
-            # Send test command
-            self.send_to_esp32('S')  # Send stop command as test
+            # Send test command and wait for response
+            try:
+                logger.info("🧪 Testing connection with STOP command...")
+                self.bt_socket.send(b'S\n')
+                
+                # Try to read response
+                self.bt_socket.settimeout(3)
+                response = self.bt_socket.recv(1024).decode().strip()
+                logger.info(f"📥 ESP32 response: {response}")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ No response from ESP32 (might be normal): {e}")
+            
+            # Reset timeout for normal operation
+            self.bt_socket.settimeout(5)
             
             return True
             
+        except bluetooth.BluetoothError as e:
+            logger.error(f"❌ Bluetooth connection failed: {e}")
+            if "Host is down" in str(e):
+                logger.error("💡 ESP32 might be powered off or out of range")
+            elif "Connection refused" in str(e):
+                logger.error("💡 ESP32 might not be accepting connections")
+            elif "No route to host" in str(e):
+                logger.error("💡 Bluetooth adapter might need restart")
+            
+            self.esp32_connected = False
+            self.bt_socket = None
+            return False
+            
         except Exception as e:
-            logger.error(f"Bluetooth connection failed: {e}")
+            logger.error(f"❌ Unexpected connection error: {e}")
             self.esp32_connected = False
             self.bt_socket = None
             return False
@@ -323,24 +359,65 @@ class RobotCommandServer:
             return False
     
     def auto_discover_esp32(self):
-        """Automatically discover and connect to ESP32"""
+        """Automatically connect to BT_CAR_32 using hardcoded MAC address"""
         try:
-            logger.info("Auto-discovering ESP32...")
-            nearby_devices = bluetooth.discover_devices(duration=10, lookup_names=True)
+            logger.info(f"Connecting to BT_CAR_32 at {self.esp32_address}...")
             
-            for addr, name in nearby_devices:
-                if name and ('esp32' in name.lower() or 'robot' in name.lower()):
-                    logger.info(f"Found potential ESP32: {name} ({addr})")
-                    if self.connect_bluetooth(addr):
-                        return True
-            
-            logger.warning("No ESP32 devices found")
-            return False
+            # Direct connection using hardcoded MAC
+            if self.connect_bluetooth(self.esp32_address):
+                logger.info("🎉 Successfully connected to BT_CAR_32!")
+                return True
+            else:
+                logger.error("❌ Failed to connect to BT_CAR_32")
+                
+                # Fallback: Try scanning if direct connection fails
+                logger.info("🔍 Fallback: Scanning for BT_CAR_32...")
+                nearby_devices = bluetooth.discover_devices(duration=10, lookup_names=True)
+                
+                for addr, name in nearby_devices:
+                    logger.info(f"Found device: {name} ({addr})")
+                    if name and ('BT_CAR' in name.upper() or addr == self.esp32_address):
+                        logger.info(f"📡 Trying to connect to: {name} ({addr})")
+                        if self.connect_bluetooth(addr):
+                            self.esp32_address = addr  # Update MAC if different
+                            return True
+                
+                logger.warning("❌ BT_CAR_32 not reachable")
+                logger.info("💡 Make sure ESP32 is powered on and within range")
+                return False
             
         except Exception as e:
-            logger.error(f"Auto-discovery failed: {e}")
+            logger.error(f"Auto-connection failed: {e}")
             return False
     
+    def test_esp32_connection(self):
+        """Test direct connection to BT_CAR_32"""
+        try:
+            logger.info(f"🧪 Testing connection to BT_CAR_32 ({self.esp32_address})...")
+            
+            if self.connect_bluetooth(self.esp32_address):
+                # Send test commands
+                test_commands = ['S', 'F', 'S', 'B', 'S']
+                for cmd in test_commands:
+                    logger.info(f"📤 Testing command: {cmd}")
+                    if self.send_to_esp32(cmd):
+                        logger.info(f"✅ Command {cmd} sent successfully")
+                    else:
+                        logger.error(f"❌ Command {cmd} failed")
+                    time.sleep(0.5)
+                
+                # Final stop
+                self.send_to_esp32('S')
+                logger.info("🎉 BT_CAR_32 connection test completed!")
+                return True
+            else:
+                logger.error("❌ Could not establish test connection")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Test connection failed: {e}")
+            return False
+
     def cleanup(self):
         """Cleanup resources"""
         if self.bt_socket:
