@@ -23,8 +23,8 @@ import logging
 from datetime import datetime
 from flask import Flask, request, jsonify, Response
 import cv2
-import bluetooth
-from bluetooth import BluetoothSocket, RFCOMM
+import serial
+import serial.tools.list_ports
 
 # Configure logging
 def setup_logging():
@@ -62,8 +62,9 @@ class RobotCommandServer:
     def __init__(self):
         self.app = Flask(__name__)
         self.camera = None
-        self.bt_socket = None
-        self.esp32_address = "1C:69:20:A4:30:2A"  # BT_CAR_32 MAC address
+        self.serial_connection = None
+        self.esp32_serial_port = "/dev/ttyUSB0"  # Default USB-to-Serial port
+        self.esp32_baud_rate = 115200  # Match ESP32 serial baud rate
         self.last_command = 'S'
         self.command_count = 0
         self.esp32_connected = False
@@ -78,7 +79,7 @@ class RobotCommandServer:
         # Initialize camera
         self.init_camera()
         
-        logger.info("Robot Command Server initialized")
+        logger.info("Robot Command Server initialized (UART mode)")
     
     def setup_routes(self):
         """Setup Flask routes"""
@@ -158,7 +159,8 @@ class RobotCommandServer:
             return jsonify({
                 'server_status': 'running',
                 'esp32_connected': self.esp32_connected,
-                'esp32_address': self.esp32_address,
+                'serial_port': self.esp32_serial_port,
+                'baud_rate': self.esp32_baud_rate,
                 'camera_active': self.camera_active,
                 'last_command': self.last_command,
                 'command_count': self.command_count,
@@ -168,19 +170,21 @@ class RobotCommandServer:
         
         @self.app.route('/connect_esp32', methods=['POST'])
         def connect_esp32():
-            """Manual ESP32 connection with provided address"""
+            """Manual ESP32 connection with provided serial port"""
             try:
                 data = request.get_json()
-                if not data or 'address' not in data:
-                    return jsonify({'error': 'No ESP32 address provided'}), 400
+                if not data or 'port' not in data:
+                    return jsonify({'error': 'No serial port provided'}), 400
                 
-                address = data['address']
-                success = self.connect_bluetooth(address)
+                port = data['port']
+                baud_rate = data.get('baud_rate', 115200)
+                success = self.connect_serial(port, baud_rate)
                 
                 if success:
                     return jsonify({
                         'status': 'connected',
-                        'esp32_address': address,
+                        'serial_port': port,
+                        'baud_rate': baud_rate,
                         'message': 'ESP32 connected successfully'
                     })
                 else:
@@ -193,29 +197,30 @@ class RobotCommandServer:
                 logger.error(f"Error connecting to ESP32: {e}")
                 return jsonify({'error': str(e)}), 500
         
-        @self.app.route('/scan_bluetooth', methods=['GET'])
-        def scan_bluetooth():
-            """Scan for nearby Bluetooth devices"""
+        @self.app.route('/scan_serial', methods=['GET'])
+        def scan_serial():
+            """Scan for available serial ports"""
             try:
-                logger.info("Scanning for Bluetooth devices...")
-                nearby_devices = bluetooth.discover_devices(duration=8, lookup_names=True)
+                logger.info("Scanning for serial ports...")
+                available_ports = list(serial.tools.list_ports.comports())
                 
-                devices = []
-                for addr, name in nearby_devices:
-                    devices.append({
-                        'address': addr,
-                        'name': name or 'Unknown'
+                ports = []
+                for port in available_ports:
+                    ports.append({
+                        'device': port.device,
+                        'description': port.description,
+                        'hwid': port.hwid
                     })
-                    logger.info(f"Found device: {name} ({addr})")
+                    logger.info(f"Found port: {port.device} - {port.description}")
                 
                 return jsonify({
-                    'devices': devices,
-                    'count': len(devices),
+                    'ports': ports,
+                    'count': len(ports),
                     'timestamp': datetime.now().isoformat()
                 })
                 
             except Exception as e:
-                logger.error(f"Error scanning Bluetooth: {e}")
+                logger.error(f"Error scanning serial ports: {e}")
                 return jsonify({'error': str(e)}), 500
         
         @self.app.route('/camera_stream')
@@ -280,122 +285,168 @@ class RobotCommandServer:
         timestamp = datetime.now().strftime("%H:%M:%S")
         cv2.putText(frame, timestamp, (500, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
-    def connect_bluetooth(self, esp32_address):
-        """Connect to ESP32 via Bluetooth with detailed error handling"""
+    def connect_serial(self, port=None, baud_rate=None):
+        """Connect to ESP32 via UART serial connection"""
         try:
-            if self.bt_socket:
+            if self.serial_connection and self.serial_connection.is_open:
+                self.serial_connection.close()
+            
+            # Use provided port or default
+            if port is None:
+                port = self.esp32_serial_port
+            if baud_rate is None:
+                baud_rate = self.esp32_baud_rate
+            
+            logger.info(f"🔗 Attempting serial connection to {port} at {baud_rate} baud")
+            
+            # Create serial connection
+            self.serial_connection = serial.Serial(
+                port=port,
+                baudrate=baud_rate,
+                timeout=5,
+                write_timeout=2,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE
+            )
+            
+            # Wait for connection to stabilize
+            time.sleep(2)
+            
+            if self.serial_connection.is_open:
+                self.esp32_serial_port = port
+                self.esp32_baud_rate = baud_rate
+                self.esp32_connected = True
+                
+                logger.info(f"✅ Successfully connected to ESP32 via {port}")
+                
+                # Send test command
                 try:
-                    self.bt_socket.close()
-                except:
-                    pass
-            
-            logger.info(f"🔗 Attempting Bluetooth connection to {esp32_address}")
-            
-            # Create socket with timeout
-            self.bt_socket = BluetoothSocket(RFCOMM)
-            self.bt_socket.settimeout(15)  # 15 second timeout
-            
-            # Attempt connection
-            logger.info(f"📞 Connecting to channel 1...")
-            self.bt_socket.connect((esp32_address, 1))  # Channel 1
-            
-            self.esp32_address = esp32_address
-            self.esp32_connected = True
-            
-            logger.info(f"✅ Successfully connected to ESP32: {esp32_address}")
-            
-            # Send test command and wait for response
-            try:
-                logger.info("🧪 Testing connection with STOP command...")
-                self.bt_socket.send(b'S\n')
+                    logger.info("🧪 Testing connection with STOP command...")
+                    self.serial_connection.write(b'S\n')
+                    self.serial_connection.flush()
+                    
+                    # Try to read response
+                    if self.serial_connection.in_waiting > 0:
+                        response = self.serial_connection.read_all().decode().strip()
+                        logger.info(f"📥 ESP32 response: {response}")
+                    else:
+                        logger.info("📥 No immediate response (normal)")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Test command failed (might be normal): {e}")
                 
-                # Try to read response
-                self.bt_socket.settimeout(3)
-                response = self.bt_socket.recv(1024).decode().strip()
-                logger.info(f"📥 ESP32 response: {response}")
+                return True
+            else:
+                logger.error("❌ Serial port failed to open")
+                return False
                 
-            except Exception as e:
-                logger.warning(f"⚠️ No response from ESP32 (might be normal): {e}")
-            
-            # Reset timeout for normal operation
-            self.bt_socket.settimeout(5)
-            
-            return True
-            
-        except bluetooth.BluetoothError as e:
-            logger.error(f"❌ Bluetooth connection failed: {e}")
-            if "Host is down" in str(e):
-                logger.error("💡 ESP32 might be powered off or out of range")
-            elif "Connection refused" in str(e):
-                logger.error("💡 ESP32 might not be accepting connections")
-            elif "No route to host" in str(e):
-                logger.error("💡 Bluetooth adapter might need restart")
+        except serial.SerialException as e:
+            logger.error(f"❌ Serial connection failed: {e}")
+            if "Permission denied" in str(e):
+                logger.error("💡 Add user to dialout group: sudo usermod -a -G dialout $USER")
+            elif "No such file or directory" in str(e):
+                logger.error("💡 Check if ESP32 is connected and port exists")
+            elif "Device or resource busy" in str(e):
+                logger.error("💡 Port might be in use by another program")
             
             self.esp32_connected = False
-            self.bt_socket = None
+            self.serial_connection = None
             return False
             
         except Exception as e:
-            logger.error(f"❌ Unexpected connection error: {e}")
+            logger.error(f"❌ Unexpected serial connection error: {e}")
             self.esp32_connected = False
-            self.bt_socket = None
+            self.serial_connection = None
             return False
     
     def send_to_esp32(self, command):
-        """Send command to ESP32 via Bluetooth"""
-        if not self.esp32_connected or not self.bt_socket:
-            logger.warning("ESP32 not connected")
+        """Send command to ESP32 via UART serial"""
+        if not self.esp32_connected or not self.serial_connection or not self.serial_connection.is_open:
+            logger.warning("ESP32 not connected via serial")
             return False
         
         try:
+            # Send single character command (matching your ESP32 code)
             message = f"{command}\n"
-            self.bt_socket.send(message.encode('utf-8'))
-            logger.debug(f"Sent to ESP32: {command}")
+            self.serial_connection.write(message.encode('utf-8'))
+            self.serial_connection.flush()  # Ensure data is sent immediately
+            
+            logger.debug(f"Sent to ESP32 via serial: {command}")
+            
+            # Try to read any response
+            time.sleep(0.1)  # Small delay for ESP32 to respond
+            if self.serial_connection.in_waiting > 0:
+                response = self.serial_connection.read_all().decode().strip()
+                logger.debug(f"ESP32 serial response: {response}")
+            
             return True
             
+        except serial.SerialException as e:
+            logger.error(f"Serial communication error: {e}")
+            self.esp32_connected = False
+            return False
         except Exception as e:
             logger.error(f"Failed to send command to ESP32: {e}")
             self.esp32_connected = False
             return False
     
     def auto_discover_esp32(self):
-        """Automatically connect to BT_CAR_32 using hardcoded MAC address"""
+        """Automatically discover and connect to ESP32 via serial ports"""
         try:
-            logger.info(f"Connecting to BT_CAR_32 at {self.esp32_address}...")
+            logger.info("🔍 Scanning for ESP32 on serial ports...")
             
-            # Direct connection using hardcoded MAC
-            if self.connect_bluetooth(self.esp32_address):
-                logger.info("🎉 Successfully connected to BT_CAR_32!")
-                return True
-            else:
-                logger.error("❌ Failed to connect to BT_CAR_32")
-                
-                # Fallback: Try scanning if direct connection fails
-                logger.info("🔍 Fallback: Scanning for BT_CAR_32...")
-                nearby_devices = bluetooth.discover_devices(duration=10, lookup_names=True)
-                
-                for addr, name in nearby_devices:
-                    logger.info(f"Found device: {name} ({addr})")
-                    if name and ('BT_CAR' in name.upper() or addr == self.esp32_address):
-                        logger.info(f"📡 Trying to connect to: {name} ({addr})")
-                        if self.connect_bluetooth(addr):
-                            self.esp32_address = addr  # Update MAC if different
-                            return True
-                
-                logger.warning("❌ BT_CAR_32 not reachable")
-                logger.info("💡 Make sure ESP32 is powered on and within range")
+            # List all available serial ports
+            available_ports = list(serial.tools.list_ports.comports())
+            
+            if not available_ports:
+                logger.warning("❌ No serial ports found")
                 return False
             
+            logger.info("📋 Available serial ports:")
+            for port in available_ports:
+                logger.info(f"   {port.device} - {port.description}")
+            
+            # Try common ESP32 serial ports
+            esp32_ports = [
+                "/dev/ttyUSB0",  # USB-to-Serial adapter
+                "/dev/ttyUSB1",
+                "/dev/ttyACM0",  # Direct USB connection
+                "/dev/ttyACM1",
+                "/dev/serial0",  # Raspberry Pi serial
+                "/dev/ttyS0"     # Hardware serial
+            ]
+            
+            # Also add any detected USB-to-Serial devices
+            for port in available_ports:
+                if any(keyword in port.description.lower() for keyword in 
+                      ['usb', 'serial', 'cp210x', 'ch340', 'ftdi']):
+                    if port.device not in esp32_ports:
+                        esp32_ports.insert(0, port.device)
+            
+            # Try connecting to each port
+            for port in esp32_ports:
+                if any(p.device == port for p in available_ports):
+                    logger.info(f"� Trying port: {port}")
+                    if self.connect_serial(port):
+                        logger.info(f"🎉 Successfully connected to ESP32 on {port}!")
+                        return True
+                    time.sleep(1)  # Brief pause between attempts
+            
+            logger.warning("❌ Could not connect to ESP32 on any serial port")
+            logger.info("💡 Check ESP32 connection and drivers")
+            return False
+            
         except Exception as e:
-            logger.error(f"Auto-connection failed: {e}")
+            logger.error(f"Auto-discovery failed: {e}")
             return False
     
     def test_esp32_connection(self):
-        """Test direct connection to BT_CAR_32"""
+        """Test direct serial connection to ESP32"""
         try:
-            logger.info(f"🧪 Testing connection to BT_CAR_32 ({self.esp32_address})...")
+            logger.info(f"🧪 Testing serial connection to ESP32 on {self.esp32_serial_port}...")
             
-            if self.connect_bluetooth(self.esp32_address):
+            if self.connect_serial(self.esp32_serial_port):
                 # Send test commands
                 test_commands = ['S', 'F', 'S', 'B', 'S']
                 for cmd in test_commands:
@@ -408,7 +459,7 @@ class RobotCommandServer:
                 
                 # Final stop
                 self.send_to_esp32('S')
-                logger.info("🎉 BT_CAR_32 connection test completed!")
+                logger.info("🎉 ESP32 serial connection test completed!")
                 return True
             else:
                 logger.error("❌ Could not establish test connection")
@@ -420,8 +471,15 @@ class RobotCommandServer:
 
     def cleanup(self):
         """Cleanup resources"""
-        if self.bt_socket:
-            self.bt_socket.close()
+        if self.serial_connection and self.serial_connection.is_open:
+            try:
+                # Send stop command before closing
+                self.serial_connection.write(b'S\n')
+                self.serial_connection.flush()
+                time.sleep(0.1)
+                self.serial_connection.close()
+            except:
+                pass
         if self.camera:
             self.camera.release()
         logger.info("Server cleanup completed")
@@ -446,8 +504,8 @@ class RobotCommandServer:
 
 def main():
     """Main entry point"""
-    print("🤖 Robot Guardian - Raspberry Pi Command Server")
-    print("=" * 50)
+    print("🤖 Robot Guardian - Raspberry Pi Command Server (UART Mode)")
+    print("=" * 60)
     print("Starting server...")
     
     # Check if running on Raspberry Pi
@@ -462,9 +520,9 @@ def main():
     # Check dependencies
     missing_deps = []
     try:
-        import bluetooth
+        import serial
     except ImportError:
-        missing_deps.append('pybluez')
+        missing_deps.append('pyserial')
     
     try:
         import cv2
@@ -480,6 +538,19 @@ def main():
         print(f"❌ Missing dependencies: {', '.join(missing_deps)}")
         print("Install with: pip install " + " ".join(missing_deps))
         return
+    
+    # Check for serial ports
+    try:
+        import serial.tools.list_ports
+        ports = list(serial.tools.list_ports.comports())
+        if ports:
+            print("📋 Available serial ports:")
+            for port in ports:
+                print(f"   {port.device} - {port.description}")
+        else:
+            print("⚠️  No serial ports detected - check ESP32 connection")
+    except Exception as e:
+        print(f"⚠️  Could not scan serial ports: {e}")
     
     # Start server
     server = RobotCommandServer()
