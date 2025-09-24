@@ -19,6 +19,9 @@ wget "$GITHUB_RAW/raspberry_pi_server_remote.py" -O raspberry_pi_server_remote.p
 echo "📥 Downloading setup script..."
 wget "$GITHUB_RAW/setup_raspberry_pi.sh" -O setup_raspberry_pi.sh
 
+echo "📥 Downloading remote access script..."
+wget "$GITHUB_RAW/setup_remote_access.sh" -O setup_remote_access.sh
+
 echo "📥 Downloading guides..."
 wget "$GITHUB_RAW/REMOTE_CONTROL_GUIDE.md" -O REMOTE_CONTROL_GUIDE.md
 wget "$GITHUB_RAW/UART_SETUP_GUIDE.md" -O UART_SETUP_GUIDE.md 2>/dev/null || echo "UART guide not found (optional)"
@@ -27,6 +30,7 @@ wget "$GITHUB_RAW/REMOTE_ACCESS_GUIDE.md" -O REMOTE_ACCESS_GUIDE.md 2>/dev/null 
 # Make scripts executable
 chmod +x raspberry_pi_server_remote.py
 chmod +x setup_raspberry_pi.sh
+chmod +x setup_remote_access.sh
 
 echo ""
 echo "✅ Download complete!"

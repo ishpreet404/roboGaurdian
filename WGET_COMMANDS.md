@@ -17,6 +17,9 @@ wget https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/raspberry_p
 # Download setup script
 wget https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/setup_raspberry_pi.sh
 
+# Download remote access script
+wget https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/setup_remote_access.sh
+
 # Download guides
 wget https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/REMOTE_CONTROL_GUIDE.md
 
@@ -34,8 +37,11 @@ python3 raspberry_pi_server_remote.py
 
 # Just the setup script
 wget https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/setup_raspberry_pi.sh
-chmod +x setup_raspberry_pi.sh
-./setup_raspberry_pi.sh
+
+# Just the remote access script
+wget https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/setup_remote_access.sh
+chmod +x setup_remote_access.sh
+./setup_remote_access.sh
 ```
 
 ## Method 4: Using Git Clone

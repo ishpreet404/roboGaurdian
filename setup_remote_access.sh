@@ -84,9 +84,179 @@ start_robot_server() {
     fi
 }
 
-# Function to setup ngrok
+# Function to setup Cloudflare Tunnel (Free & Unlimited)
+setup_cloudflare_tunnel() {
+    print_step "Setting up Cloudflare Tunnel..."
+    
+    # Check if cloudflared is installed
+    if ! command -v cloudflared &> /dev/null; then
+        print_warning "cloudflared not found. Installing..."
+        
+        # Download and install cloudflared for ARM
+        cd /tmp
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -O cloudflared
+        chmod +x cloudflared
+        sudo mv cloudflared /usr/local/bin/
+        
+        print_status "cloudflared installed successfully"
+    fi
+    
+    echo ""
+    print_highlight "🌐 Cloudflare Tunnel Setup:"
+    echo "1. Go to https://dash.cloudflare.com/"
+    echo "2. Sign up/login (free account)"
+    echo "3. Go to Zero Trust > Networks > Tunnels"
+    echo "4. Create a tunnel and get your token"
+    echo ""
+    
+    read -p "Have you created a tunnel and got the token? (y/N): " -n 1 -r
+    echo
+    
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "Enter your tunnel token (starts with 'ey...'):"
+        read -r TUNNEL_TOKEN
+        
+        if [[ -n "$TUNNEL_TOKEN" ]]; then
+            print_step "Starting Cloudflare tunnel..."
+            
+            # Start tunnel
+            cloudflared tunnel --url http://localhost:5000 --token "$TUNNEL_TOKEN" &
+            TUNNEL_PID=$!
+            
+            echo ""
+            print_status "🌍 Cloudflare tunnel started!"
+            print_highlight "Your robot is now accessible via your Cloudflare domain!"
+            echo ""
+            echo "Check your Cloudflare dashboard for the tunnel URL"
+            echo "To stop tunnel later: kill $TUNNEL_PID"
+        else
+            print_error "No token provided"
+        fi
+    else
+        print_warning "Please create a Cloudflare tunnel first"
+    fi
+}
+
+# Function to setup Serveo SSH Tunnel (No signup required)
+setup_serveo_tunnel() {
+    print_step "Setting up Serveo SSH tunnel..."
+    
+    print_highlight "🔒 Serveo Tunnel (No signup required!):"
+    echo "This creates a secure SSH tunnel through serveo.net"
+    echo ""
+    
+    # Generate random subdomain
+    SUBDOMAIN="robot$(date +%s)"
+    
+    print_step "Starting Serveo tunnel..."
+    echo "Creating tunnel: https://$SUBDOMAIN.serveo.net"
+    
+    # Start SSH tunnel
+    ssh -o StrictHostKeyChecking=no -R $SUBDOMAIN:80:localhost:5000 serveo.net &
+    SERVEO_PID=$!
+    
+    sleep 3
+    
+    echo ""
+    print_status "🌍 Serveo tunnel started!"
+    print_highlight "Your robot URL: https://$SUBDOMAIN.serveo.net"
+    echo ""
+    echo "✅ No signup required!"
+    echo "✅ Unlimited requests!"
+    echo "✅ HTTPS enabled!"
+    echo ""
+    echo "To stop tunnel: kill $SERVEO_PID"
+}
+
+# Function to setup LocalTunnel (Free, simple)
+setup_localtunnel() {
+    print_step "Setting up LocalTunnel..."
+    
+    # Check if Node.js is installed
+    if ! command -v node &> /dev/null; then
+        print_warning "Node.js not found. Installing..."
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+    fi
+    
+    # Install localtunnel
+    if ! command -v lt &> /dev/null; then
+        print_status "Installing LocalTunnel..."
+        sudo npm install -g localtunnel
+    fi
+    
+    # Generate random subdomain
+    SUBDOMAIN="robot$(date +%s)"
+    
+    print_step "Starting LocalTunnel..."
+    echo "Creating tunnel: https://$SUBDOMAIN.loca.lt"
+    
+    # Start tunnel
+    lt --port 5000 --subdomain "$SUBDOMAIN" &
+    LT_PID=$!
+    
+    sleep 3
+    
+    echo ""
+    print_status "🌍 LocalTunnel started!"
+    print_highlight "Your robot URL: https://$SUBDOMAIN.loca.lt"
+    echo ""
+    echo "✅ Free and unlimited!"
+    echo "✅ Simple setup!"
+    echo "⚠️  May show warning page on first visit"
+    echo ""
+    echo "To stop tunnel: kill $LT_PID"
+}
+
+# Function to setup Pagekite (Free tier)
+setup_pagekite() {
+    print_step "Setting up PageKite..."
+    
+    # Install pagekite
+    if ! command -v pagekite.py &> /dev/null; then
+        print_status "Installing PageKite..."
+        curl -s https://pagekite.net/pk/ | sudo bash
+    fi
+    
+    print_highlight "🌊 PageKite Setup:"
+    echo "1. Go to https://pagekite.net/"
+    echo "2. Sign up for free account"
+    echo "3. Get your kite name and secret"
+    echo ""
+    
+    read -p "Enter your kite name (e.g., yourname.pagekite.me): " KITE_NAME
+    read -p "Enter your secret: " KITE_SECRET
+    
+    if [[ -n "$KITE_NAME" && -n "$KITE_SECRET" ]]; then
+        print_step "Starting PageKite tunnel..."
+        
+        # Start pagekite
+        pagekite.py --frontend="$KITE_NAME:$KITE_SECRET" 5000 "$KITE_NAME" &
+        PK_PID=$!
+        
+        echo ""
+        print_status "🌍 PageKite tunnel started!"
+        print_highlight "Your robot URL: http://$KITE_NAME"
+        echo ""
+        echo "To stop tunnel: kill $PK_PID"
+    fi
+}
+
+# Function to setup ngrok (with warning)
 setup_ngrok() {
     print_step "Setting up ngrok tunnel..."
+    
+    print_warning "⚠️  ngrok Free Tier Limitations:"
+    echo "• Only 120 requests per month"
+    echo "• Sessions timeout after 2 hours"
+    echo "• Consider using Cloudflare Tunnel or Serveo instead"
+    echo ""
+    
+    read -p "Continue with ngrok anyway? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        return
+    fi
     
     # Check if ngrok is installed
     if ! command -v ngrok &> /dev/null; then
@@ -280,18 +450,22 @@ main_menu() {
     
     echo "Choose remote access method:"
     echo ""
-    echo "1) 🔒 ngrok Tunnel (Recommended - Easy & Secure)"
-    echo "2) 🌐 Port Forwarding (Requires router access)"  
-    echo "3) 🔐 VPN Setup (Most secure)"
-    echo "4) 🌍 Dynamic DNS (For changing IPs)"
-    echo "5) 🧪 Test local access"
-    echo "6) 🔥 Configure firewall"
-    echo "7) 🚀 Start robot server"
-    echo "8) ❓ Show all methods"
-    echo "9) 🚪 Exit"
+    echo "1) 🌐 Cloudflare Tunnel (Recommended - Free & Unlimited)"
+    echo "2) 🔒 Serveo SSH Tunnel (No signup, unlimited)"
+    echo "3) 🚀 LocalTunnel (Simple, unlimited)"
+    echo "4) 🌊 PageKite (Free tier available)"
+    echo "5) 🔗 Port Forwarding (Direct router access)"  
+    echo "6) 🔐 VPN Setup (Most secure)"
+    echo "7) 🌍 Dynamic DNS (For changing IPs)"
+    echo "8) 💰 ngrok (Limited: 120 req/month)"
+    echo "9) 🧪 Test local access"
+    echo "10) 🔥 Configure firewall"
+    echo "11) 🚀 Start robot server"
+    echo "12) ❓ Show all methods"
+    echo "13) 🚪 Exit"
     echo ""
     
-    read -p "Enter choice (1-9): " choice
+    read -p "Enter choice (1-13): " choice
     
     case $choice in
         1)
@@ -299,37 +473,61 @@ main_menu() {
             if ! check_server_running; then
                 start_robot_server
             fi
-            setup_ngrok
+            setup_cloudflare_tunnel
             ;;
         2)
-            show_port_forwarding
+            if ! check_server_running; then
+                start_robot_server
+            fi
+            setup_serveo_tunnel
             ;;
         3)
-            show_vpn_setup
+            if ! check_server_running; then
+                start_robot_server
+            fi
+            setup_localtunnel
             ;;
         4)
-            show_dynamic_dns
+            if ! check_server_running; then
+                start_robot_server
+            fi
+            setup_pagekite
             ;;
         5)
-            test_local_access
+            show_port_forwarding
             ;;
         6)
-            setup_firewall
+            show_vpn_setup
             ;;
         7)
-            start_robot_server
+            show_dynamic_dns
             ;;
         8)
-            # Show all methods
             if ! check_server_running; then
                 start_robot_server
             fi
             setup_ngrok
-            show_port_forwarding
-            show_vpn_setup
-            show_dynamic_dns
             ;;
         9)
+            test_local_access
+            ;;
+        10)
+            setup_firewall
+            ;;
+        11)
+            start_robot_server
+            ;;
+        12)
+            # Show all methods
+            if ! check_server_running; then
+                start_robot_server
+            fi
+            setup_cloudflare_tunnel
+            setup_serveo_tunnel
+            show_port_forwarding
+            show_vpn_setup
+            ;;
+        13)
             print_status "Goodbye! 🤖"
             exit 0
             ;;
@@ -346,6 +544,22 @@ main_menu() {
 # Check if script is run with parameters
 if [[ $# -gt 0 ]]; then
     case $1 in
+        --cloudflare)
+            start_robot_server
+            setup_cloudflare_tunnel
+            ;;
+        --serveo)
+            start_robot_server
+            setup_serveo_tunnel
+            ;;
+        --localtunnel)
+            start_robot_server
+            setup_localtunnel
+            ;;
+        --pagekite)
+            start_robot_server
+            setup_pagekite
+            ;;
         --ngrok)
             start_robot_server
             setup_ngrok
@@ -363,7 +577,7 @@ if [[ $# -gt 0 ]]; then
             start_robot_server
             ;;
         *)
-            echo "Usage: $0 [--ngrok|--port-forward|--vpn|--test|--start-server]"
+            echo "Usage: $0 [--cloudflare|--serveo|--localtunnel|--pagekite|--ngrok|--port-forward|--vpn|--test|--start-server]"
             exit 1
             ;;
     esac
