@@ -68,12 +68,13 @@ class PersonTrackerGUI:
         
         # Robot connection
         self.robot_connected = False
-        self.robot_ip = tk.StringVar(value="10.214.108.26")
+        self.robot_ip = tk.StringVar(value="https://0eb12f6c4bd4153084c9ee30fac391ff.serveo.net")
+        self.uart_baud_rate = 9600  # Changed to 9600 for ESP32 compatibility
         
         # Video source
-        self.video_source = tk.IntVar(value=0)
+        self.video_source = tk.IntVar(value=2)  # Default to network stream
         self.video_file = tk.StringVar()
-        self.network_stream = tk.StringVar(value="http://10.214.108.26:5000/?action=stream")
+        self.network_stream = tk.StringVar(value="https://0eb12f6c4bd4153084c9ee30fac391ff.serveo.net/video_feed")
         
         # Create GUI elements
         self.create_widgets()
@@ -218,22 +219,26 @@ class PersonTrackerGUI:
             command=self.browse_video_file
         ).pack(side=tk.RIGHT, padx=5)
         
-        # Network stream URL
+        # Network stream URL - Default to Serveo tunnel
         stream_frame = ttk.Frame(source_frame)
         stream_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(stream_frame, text="Stream URL:").pack(anchor='w')
+        ttk.Label(stream_frame, text="Pi Stream URL:").pack(anchor='w')
         self.stream_entry = ttk.Entry(stream_frame, textvariable=self.network_stream)
         self.stream_entry.pack(fill=tk.X, pady=2)
         
-        # Robot connection
-        robot_frame = ttk.LabelFrame(right_frame, text="Robot Connection", padding="10")
+        # Quick setup button for Pi
+        ttk.Button(stream_frame, text="🚀 Use Serveo Tunnel", 
+                  command=self.setup_serveo_stream).pack(pady=2)
+        
+        # Robot connection - Auto-connect to Pi
+        robot_frame = ttk.LabelFrame(right_frame, text="🤖 Robot Connection", padding="10")
         robot_frame.pack(fill=tk.X, pady=5)
         
-        self.robot_connected_var = tk.BooleanVar(value=False)
+        self.robot_connected_var = tk.BooleanVar(value=True)  # Auto-enable for Pi
         self.robot_check = ttk.Checkbutton(
             robot_frame,
-            text="Connect to Robot",
+            text="🔗 Connect to Pi Robot",
             variable=self.robot_connected_var,
             command=self.toggle_robot_connection
         )
@@ -242,11 +247,14 @@ class PersonTrackerGUI:
         ip_frame = ttk.Frame(robot_frame)
         ip_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(ip_frame, text="Robot IP:").pack(side=tk.LEFT)
-        ttk.Entry(ip_frame, textvariable=self.robot_ip, width=15).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ip_frame, text="Pi URL:").pack(side=tk.LEFT)
+        ttk.Entry(ip_frame, textvariable=self.robot_ip, width=20).pack(side=tk.LEFT, padx=5)
         
         # Test connection button
-        ttk.Button(ip_frame, text="Test", command=self.test_robot_connection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(ip_frame, text="🔍 Test", command=self.test_robot_connection).pack(side=tk.LEFT, padx=5)
+        
+        # Auto-sync button
+        ttk.Button(ip_frame, text="🔄 Sync URLs", command=self.sync_urls).pack(side=tk.LEFT, padx=2)
         
         # Current command display
         command_frame = ttk.LabelFrame(right_frame, text="Current Command", padding="10")
@@ -429,27 +437,69 @@ class PersonTrackerGUI:
         else:
             self.update_status("Robot disconnected")
     
+    def setup_serveo_stream(self):
+        """Quick setup for Serveo tunnel stream"""
+        serveo_url = "https://0eb12f6c4bd4153084c9ee30fac391ff.serveo.net"
+        
+        # Update both stream URL and robot IP
+        self.network_stream.set(f"{serveo_url}/video_feed")
+        self.robot_ip.set(serveo_url)
+        
+        # Set to network stream mode
+        self.video_source.set(2)
+        
+        # Enable robot connection
+        self.robot_connected_var.set(True)
+        self.robot_connected = True
+        
+        self.update_status("🚀 Configured for Serveo tunnel - Ready to track!")
+        messagebox.showinfo("Serveo Setup", 
+                           f"✅ Configured for Pi streaming via Serveo\n\n"
+                           f"Stream: {serveo_url}/video_feed\n"
+                           f"Control: {serveo_url}\n\n"
+                           f"Click 'Start Tracking' to begin!")
+    
+    def sync_urls(self):
+        """Sync stream URL and robot IP from the same base URL"""
+        base_url = self.robot_ip.get()
+        if not base_url.startswith('http'):
+            base_url = f"http://{base_url}:5000"
+        
+        # Update stream URL to match robot IP
+        self.network_stream.set(f"{base_url}/video_feed")
+        self.robot_ip.set(base_url)
+        
+        self.update_status(f"🔄 URLs synced to: {base_url}")
+
     def test_robot_connection(self):
         """Test connection to Raspberry Pi server"""
         def test_connection():
             try:
                 import requests
-                url = f"http://{self.robot_ip.get()}:5000/"
-                response = requests.get(url, timeout=3.0)
+                base_url = self.robot_ip.get()
+                if not base_url.startswith('http'):
+                    url = f"http://{base_url}:5000/status"
+                else:
+                    url = f"{base_url}/status"
+                    
+                response = requests.get(url, timeout=5.0)
                 
                 if response.status_code == 200:
                     data = response.json()
                     server_status = data.get('status', 'unknown')
-                    esp32_status = data.get('esp32_connected', False)
+                    uart_status = data.get('uart_status', 'unknown')
+                    camera_status = data.get('camera_status', 'unknown')
                     
                     def update_ui():
-                        status_msg = f"Connected to Pi - ESP32: {'✓' if esp32_status else '✗'}"
+                        status_msg = f"✅ Pi Connected - UART: {uart_status}, Camera: {camera_status}"
                         self.update_status(status_msg)
-                        if not esp32_status:
-                            messagebox.showwarning(
-                                "ESP32 Not Connected", 
-                                f"Raspberry Pi is running but ESP32 is not connected.\n\n"
-                                f"Server Status: {server_status}\n"
+                        messagebox.showinfo(
+                            "Pi Connection Test", 
+                            f"✅ Successfully connected to Pi!\n\n"
+                            f"Server Status: {server_status}\n"
+                            f"UART Status: {uart_status}\n"
+                            f"Camera Status: {camera_status}\n\n"
+                            f"Ready for person tracking!"
                                 f"Check ESP32 Bluetooth pairing."
                             )
                     self.window.after(0, update_ui)
