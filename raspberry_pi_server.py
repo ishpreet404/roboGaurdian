@@ -51,7 +51,7 @@ def setup_logging():
     
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        format='%(asctime)s - %(levelname)s - %(message should be the)s',
         handlers=log_handlers
     )
 
