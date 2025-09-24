@@ -19,11 +19,14 @@
 #include <Arduino.h>
 #include <ctype.h>
 
-// ===== CONFIG (UNCHANGED) =====
-const int SAFE_DISTANCE = 30;                // cm
+// ===== CONFIG WITH MOVEMENT TIMING =====
+const int SAFE_DISTANCE = 50;                // cm - increased for better safety
 const unsigned long SENSOR_INTERVAL = 40UL;  // ms between sensor updates
 const int NUM_SAMPLES = 2;                   // fewer samples for speed
 const unsigned long PULSE_TIMEOUT = 6000UL;  // µs (~1 m max range)
+const unsigned long MOVEMENT_DURATION = 200; // ms - how long to execute each movement
+const unsigned long STOP_DURATION = 100;     // ms - pause between movements
+const unsigned long SEARCH_TURN_DURATION = 150; // ms - slower turns for 360 search
 
 // ===== MOTOR PINS (UNCHANGED) =====
 const int LEFT_PIN_A  = 21;
@@ -46,14 +49,17 @@ const int LED_OBS   = 13;
 // Using UART0 (default Serial) - GPIO1/3
 // GPIO3 = RX0, GPIO1 = TX0 (built-in Serial)
 
-// ===== STATE (UNCHANGED) =====
+// ===== STATE WITH MOVEMENT TIMING =====
 enum MotorState { MS_STOP, MS_FORWARD, MS_BACKWARD, MS_LEFT, MS_RIGHT };
 MotorState currentState = MS_STOP;
 MotorState requestedState = MS_STOP;
 bool autoReverseActive = false;
+bool isSearchMode = false; // For 360-degree search when no person found
 
 int lastDistance = 999;
 unsigned long lastSensorMillis = 0;
+unsigned long movementStartTime = 0;
+bool isExecutingMovement = false;
 const bool DEBUG = true;
 
 // ===== MOTOR HELPERS (UNCHANGED) =====
@@ -97,17 +103,31 @@ void updateDirectionLEDs(MotorState s) {
   digitalWrite(LED_RIGHT, (s == MS_RIGHT));
 }
 
-// ===== ULTRASONIC (COMPLETELY UNCHANGED) =====
+// ===== ULTRASONIC WITH ENHANCED DEBUGGING =====
 int getDistanceRaw() {
+  // Ensure clean trigger pulse
   digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(2);
+  delayMicroseconds(5);
   digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(10);
+  delayMicroseconds(12);
   digitalWrite(TRIG_PIN, LOW);
 
+  // Wait for echo with timeout
   unsigned long dur = pulseIn(ECHO_PIN, HIGH, PULSE_TIMEOUT);
-  if (dur == 0UL) return -1; // no echo
-  return (int)(dur * 0.0343f / 2.0f);
+  if (dur == 0UL) {
+    if (DEBUG) {
+      static int noEchoCount = 0;
+      noEchoCount++;
+      if(noEchoCount % 50 == 1) { // Log every 50th failure
+        Serial.println("⚠️ NO ECHO - Check HC-SR04 wiring/power");
+      }
+    }
+    return -1; // no echo
+  }
+  
+  // Convert to distance (speed of sound = 343 m/s)
+  float distance = (dur * 0.0343f) / 2.0f;
+  return (int)distance;
 }
 
 int getDistanceFiltered() {
@@ -159,8 +179,23 @@ void setup() {
 
   if (DEBUG) {
     Serial.println("ESP32 Robot Ready - UART0 (GPIO1/3) at 9600 baud");
+    Serial.print("TRIG_PIN: "); Serial.println(TRIG_PIN);
+    Serial.print("ECHO_PIN: "); Serial.println(ECHO_PIN);
     Serial.print("Initial distance: "); 
     Serial.println(lastDistance);
+    
+    // Test ultrasonic pins
+    Serial.println("Testing ultrasonic sensor...");
+    for(int i = 0; i < 5; i++) {
+      int raw = getDistanceRaw();
+      Serial.print("Test "); Serial.print(i+1); Serial.print(": ");
+      if(raw == -1) {
+        Serial.println("NO ECHO");
+      } else {
+        Serial.print(raw); Serial.println(" cm");
+      }
+      delay(200);
+    }
   }
   
   // Send ready signal to Pi
@@ -179,11 +214,17 @@ void loop() {
     MotorState newRequest = requestedState;
     bool validCommand = false;
     
-    if (c == 'F') { newRequest = MS_FORWARD; validCommand = true; }
-    else if (c == 'B') { newRequest = MS_BACKWARD; validCommand = true; }
-    else if (c == 'L') { newRequest = MS_LEFT; validCommand = true; }
-    else if (c == 'R') { newRequest = MS_RIGHT; validCommand = true; }
-    else if (c == 'S') { newRequest = MS_STOP; validCommand = true; }
+    if (c == 'F') { newRequest = MS_FORWARD; validCommand = true; isSearchMode = false; }
+    else if (c == 'B') { newRequest = MS_BACKWARD; validCommand = true; isSearchMode = false; }
+    else if (c == 'L') { newRequest = MS_LEFT; validCommand = true; isSearchMode = false; }
+    else if (c == 'R') { newRequest = MS_RIGHT; validCommand = true; isSearchMode = false; }
+    else if (c == 'S') { newRequest = MS_STOP; validCommand = true; isSearchMode = false; }
+    else if (c == 'X') { // Search mode - slow 360 turn
+      newRequest = MS_RIGHT; 
+      validCommand = true; 
+      isSearchMode = true;
+      if (DEBUG) Serial.println("🔍 Search mode activated");
+    }
 
     if (validCommand && newRequest != requestedState) {
       requestedState = newRequest;
@@ -206,10 +247,20 @@ void loop() {
       // Update direction LEDs
       updateDirectionLEDs(requestedState);
 
-      // Apply command immediately if not forward (forward is handled by obstacle logic)
-      if (newRequest != MS_FORWARD) {
+      // Start timed movement execution
+      if (newRequest == MS_STOP) {
+        // Stop immediately
         autoReverseActive = false;
-        applyMotorState(newRequest);
+        applyMotorState(MS_STOP);
+        isExecutingMovement = false;
+      } else {
+        // Start timed movement
+        movementStartTime = millis();
+        isExecutingMovement = true;
+        if (newRequest != MS_FORWARD) {
+          autoReverseActive = false;
+          applyMotorState(newRequest);
+        }
       }
     } else if (!validCommand) {
       if (DEBUG) {
@@ -221,23 +272,59 @@ void loop() {
     }
   }
 
-  // 2) Update distance fast (UNCHANGED ULTRASONIC LOGIC)
+  // 2) Update distance fast with enhanced debugging
   if (now - lastSensorMillis >= SENSOR_INTERVAL) {
     lastSensorMillis = now;
+    int rawDist = getDistanceRaw();
     lastDistance = getDistanceFiltered();
-    // Distance debug (will go to Pi via UART, but minimal output)
-    if (DEBUG && (lastDistance < 40 || lastDistance > 200)) {
-      Serial.print("Dist: ");
-      Serial.println(lastDistance);
+    
+    // Enhanced distance debug
+    if (DEBUG) {
+      static int debugCounter = 0;
+      debugCounter++;
+      if(debugCounter % 25 == 0) { // Every ~1 second at 40ms intervals
+        Serial.print("Raw: "); Serial.print(rawDist);
+        Serial.print(" cm, Filtered: "); Serial.print(lastDistance);
+        if(rawDist == -1) Serial.print(" [NO_ECHO]");
+        if(lastDistance == 999) Serial.print(" [INVALID]");
+        Serial.println();
+      }
     }
   }
 
-  // 3) Obstacle avoidance (COMPLETELY UNCHANGED LOGIC)
+  // 3) Handle timed movements
+  if (isExecutingMovement && !autoReverseActive) {
+    unsigned long elapsed = millis() - movementStartTime;
+    unsigned long targetDuration = isSearchMode ? SEARCH_TURN_DURATION : MOVEMENT_DURATION;
+    
+    if (elapsed >= targetDuration) {
+      // Movement time completed, stop and wait
+      applyMotorState(MS_STOP);
+      isExecutingMovement = false;
+      
+      if (DEBUG) {
+        if (isSearchMode) {
+          Serial.println("🔍 Search turn completed, pausing");
+        } else {
+          Serial.print("Movement completed, stopping for ");
+          Serial.print(STOP_DURATION);
+          Serial.println("ms");
+        }
+      }
+      
+      // Brief pause for frame processing (longer for search mode)
+      unsigned long pauseDuration = isSearchMode ? (STOP_DURATION + 50) : STOP_DURATION;
+      delay(pauseDuration);
+    }
+  }
+
+  // 4) Obstacle avoidance (overrides timed movements)
   if (lastDistance < SAFE_DISTANCE) {
     if (!autoReverseActive) {
       if (DEBUG) Serial.println("OBSTACLE!");
     }
     autoReverseActive = true;
+    isExecutingMovement = false; // Cancel any timed movement
     applyMotorState(MS_BACKWARD);
     digitalWrite(LED_OBS, HIGH);
   } else if (autoReverseActive) {
@@ -246,8 +333,8 @@ void loop() {
     applyMotorState(MS_STOP);
     digitalWrite(LED_OBS, LOW);
   } else {
-    // No obstacle in safe zone
-    if (requestedState == MS_FORWARD) {
+    // No obstacle in safe zone - handle forward movement
+    if (requestedState == MS_FORWARD && isExecutingMovement) {
       applyMotorState(MS_FORWARD);
     }
     digitalWrite(LED_OBS, LOW);

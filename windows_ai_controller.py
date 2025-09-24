@@ -308,8 +308,15 @@ class WindowsAIController:
                         self.log(f"⚠️ YOLO detection error: {e}")
                 
                 # Auto tracking logic
-                if self.auto_tracking.get() and detections:
-                    self.process_auto_tracking(detections, processed_frame.shape)
+                if self.auto_tracking.get():
+                    if detections:
+                        self.process_auto_tracking(detections, processed_frame.shape)
+                        # Reset search mode when person found
+                        if hasattr(self, 'search_active'):
+                            self.search_active = False
+                    else:
+                        # No person detected - activate search mode
+                        self.process_search_mode()
                 
                 # Update display
                 self.update_video_display(processed_frame)
@@ -347,44 +354,95 @@ class WindowsAIController:
         if command:
             self.send_command(command, auto=True)
             
+    def process_search_mode(self):
+        """360-degree search when no person is detected"""
+        current_time = time.time()
+        
+        # Initialize search mode tracking
+        if not hasattr(self, 'search_active'):
+            self.search_active = False
+            self.search_start_time = 0
+            self.search_last_command_time = 0
+        
+        # Start search if not already active
+        if not self.search_active:
+            self.search_active = True
+            self.search_start_time = current_time
+            self.search_last_command_time = 0
+            self.log("🔍 No person detected - Starting 360° search")
+        
+        # Send search commands (slow turn with pauses)
+        if current_time - self.search_last_command_time > 0.4:  # 400ms between search commands
+            self.send_command('X', auto=True)  # X = search mode (slow right turn)
+            self.search_last_command_time = current_time
+            
+        # Stop search after reasonable time (30 seconds) and rest
+        if current_time - self.search_start_time > 30:
+            self.log("🔍 Search timeout - Stopping to conserve power")
+            self.send_command('S', auto=True)
+            self.search_active = False
+            time.sleep(5)  # Rest for 5 seconds
+            
     def calculate_movement_command(self, center_x, center_y, area, frame_width, frame_height):
-        """Calculate robot movement based on person position"""
-        # Thresholds
-        x_threshold = frame_width * 0.15  # 15% dead zone
-        min_area = (frame_width * frame_height) * 0.03  # 3% minimum size
-        max_area = (frame_width * frame_height) * 0.4   # 40% maximum size
+        """Calculate robot movement based on person position with increased safety distance"""
+        # Thresholds - adjusted for increased safety
+        x_threshold = frame_width * 0.12  # 12% dead zone (tighter centering)
+        min_area = (frame_width * frame_height) * 0.025 # 2.5% minimum size (approach closer)
+        max_area = (frame_width * frame_height) * 0.25  # 25% maximum size (larger safety zone)
         
         frame_center_x = frame_width / 2
         offset_x = center_x - frame_center_x
         
-        # Person too small (far away) - move forward
+        # Check if we need to alternate with STOP commands for ESP32 timing
+        current_time = time.time()
+        if not hasattr(self, 'last_movement_command'):
+            self.last_movement_command = 'S'
+            self.last_movement_time = 0
+        
+        # Person too small (far away) - move forward cautiously
         if area < min_area:
-            return 'F'
+            command = 'F'
             
-        # Person too large (too close) - stop or back up
-        if area > max_area:
-            return 'S'
+        # Person too large (too close) - stop and maintain distance
+        elif area > max_area:
+            command = 'S'
+            self.log("🛑 Person too close - maintaining safe distance")
             
-        # Person off-center horizontally - turn
-        if offset_x > x_threshold:
-            return 'R'  # Turn right
+        # Person off-center horizontally - turn to center
+        elif offset_x > x_threshold:
+            command = 'R'  # Turn right
         elif offset_x < -x_threshold:
-            return 'L'  # Turn left
+            command = 'L'  # Turn left
             
-        # Person centered and good size - move forward slowly
-        return 'F'
+        # Person centered and good size - approach slowly
+        else:
+            command = 'F'
+        
+        # Ensure ESP32 gets time to process by alternating movement with stops
+        if command != 'S' and self.last_movement_command != 'S':
+            # If last command wasn't STOP and current isn't STOP, send STOP first
+            if current_time - self.last_movement_time > 0.3:  # 300ms since last movement
+                self.last_movement_command = 'S'
+                self.last_movement_time = current_time
+                return 'S'
+        
+        self.last_movement_command = command
+        if command != 'S':
+            self.last_movement_time = current_time
+            
+        return command
         
     def send_command(self, command, auto=False):
         """Send movement command to Pi → ESP32 (GPIO1/3 UART0)"""
         try:
-            # Rate limiting - ESP32 obstacle avoidance needs time between commands
+            # Rate limiting - Allow faster commands for movement/stop pattern
             current_time = time.time()
-            if current_time - self.last_command_time < 0.15:  # 150ms minimum for ESP32 processing
+            if current_time - self.last_command_time < 0.1:  # 100ms minimum for ESP32 processing
                 return
                 
             # Validate ESP32 command format (must be single uppercase letters)
-            if command not in ['F', 'B', 'L', 'R', 'S']:
-                self.log(f"❌ Invalid ESP32 command: {command}. Valid: F/B/L/R/S")
+            if command not in ['F', 'B', 'L', 'R', 'S', 'X']:
+                self.log(f"❌ Invalid ESP32 command: {command}. Valid: F/B/L/R/S/X")
                 return
                 
             url = f"{self.PI_BASE_URL}/move"
@@ -564,6 +622,18 @@ class WindowsAIController:
         try:
             # Resize frame for display
             display_frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
+            
+            # Add search mode indicator
+            if hasattr(self, 'search_active') and self.search_active:
+                cv2.putText(display_frame, "🔍 SEARCHING FOR PERSON...", 
+                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                # Add rotating search indicator
+                import math
+                center = (320, 240)
+                angle = (time.time() * 90) % 360  # Rotating indicator
+                x = int(center[0] + 50 * math.cos(math.radians(angle)))
+                y = int(center[1] + 50 * math.sin(math.radians(angle)))
+                cv2.circle(display_frame, (x, y), 8, (0, 255, 255), -1)
             
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
