@@ -76,6 +76,23 @@ PROJECT_DIR="$HOME/robot-guardian"
 mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 
+# Download required files from GitHub repository
+print_step "Downloading robot server files..."
+GITHUB_RAW_URL="https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main"
+
+# Download main server file
+if ! wget -q "$GITHUB_RAW_URL/raspberry_pi_server_remote.py" -O raspberry_pi_server_remote.py; then
+    print_error "Failed to download raspberry_pi_server_remote.py"
+    print_status "Manual download: Copy the file manually or check internet connection"
+fi
+
+# Download configuration and guides
+wget -q "$GITHUB_RAW_URL/REMOTE_CONTROL_GUIDE.md" -O REMOTE_CONTROL_GUIDE.md 2>/dev/null || true
+wget -q "$GITHUB_RAW_URL/UART_SETUP_GUIDE.md" -O UART_SETUP_GUIDE.md 2>/dev/null || true
+wget -q "$GITHUB_RAW_URL/REMOTE_ACCESS_GUIDE.md" -O REMOTE_ACCESS_GUIDE.md 2>/dev/null || true
+
+print_status "Files downloaded to $PROJECT_DIR"
+
 # Create startup script
 print_step "Creating startup scripts..."
 cat > start_robot_server.sh << 'EOF'
