@@ -388,67 +388,67 @@ class WindowsAIController:
             self.turn_direction = 'R'  # Start with right, then alternate L/R
             self.micro_turn_count = 0  # Track individual micro-turns
             
-        # Extremely slow multi-phase search with maximum stops
+        # Ultra-extremely slow multi-phase search with maximum stops
         if self.search_step == 'scan1':
-            # Extended first scanning phase - very long pause
-            if current_time - self.search_last_command_time > 8.0:  # 8 second deep scan
+            # Ultra-extended first scanning phase - very long pause
+            if current_time - self.search_last_command_time > 12.0:  # 12 second ultra-deep scan
                 self.search_last_command_time = current_time
                 self.search_step = 'turn_right'
                 self.turn_spam_count = 0
                 self.micro_turn_count = 0
-                self.log("🔍 Search: 8s deep scan complete → Ultra-micro-turns")
+                self.log("🔍 Search: 12s ultra-deep scan complete → Pico-micro-turns")
                 
         elif self.search_step == 'turn_right':
-            # Ultra-short turn commands with maximum control
-            if current_time - self.search_last_command_time > 0.01:  # 10ms ultra-micro-turn
+            # Ultra-minimal turn commands with extreme precision
+            if current_time - self.search_last_command_time > 0.002:  # 2ms pico-micro-turn
                 self.send_command(self.turn_direction, auto=True)  # Turn (R or L)
                 self.search_last_command_time = current_time
                 self.search_step = 'turn_stop'
                 self.micro_turn_count += 1
                 direction_name = "right" if self.turn_direction == 'R' else "left"
-                self.log(f"🔍 Search: Ultra-micro-{direction_name} #{self.micro_turn_count}")
+                self.log(f"🔍 Search: Pico-micro-{direction_name} #{self.micro_turn_count}")
                 
         elif self.search_step == 'turn_stop':
-            # Immediate stop after each ultra-micro-turn
-            if current_time - self.search_last_command_time > 0.005:  # 5ms then stop
+            # Immediate stop after each pico-micro-turn
+            if current_time - self.search_last_command_time > 0.001:  # 1ms then stop
                 self.send_command('S', auto=True)  # Stop
                 self.search_last_command_time = current_time
                 self.search_step = 'turn_pause1'
                 self.log(f"🔍 Search: STOP #{self.micro_turn_count}")
                 
         elif self.search_step == 'turn_pause1':
-            # First pause phase - medium pause
-            if current_time - self.search_last_command_time > 1.5:  # 1.5s pause for detection
+            # First pause phase - extended pause
+            if current_time - self.search_last_command_time > 3.0:  # 3s pause for detection
                 self.search_last_command_time = current_time
                 self.search_step = 'turn_pause2'
-                self.log("🔍 Search: Pause phase 1 → Pause phase 2")
+                self.log("🔍 Search: Extended pause phase 1 → Pause phase 2")
                 
         elif self.search_step == 'turn_pause2':
-            # Second pause phase - extended pause
-            if current_time - self.search_last_command_time > 2.0:  # 2s extended pause
+            # Second pause phase - ultra-extended pause
+            if current_time - self.search_last_command_time > 4.0:  # 4s ultra-extended pause
                 self.search_last_command_time = current_time
                 self.turn_spam_count += 1
                 
-                # Do 8 ultra-micro turn cycles before moving to scan2
-                if self.turn_spam_count >= 8:
+                # Do 20 pico-micro turn cycles before moving to scan2 (maximum cycles, minimal intensity each)
+                if self.turn_spam_count >= 20:
                     self.search_step = 'scan2'
                     direction_name = "right" if self.turn_direction == 'R' else "left"
-                    self.log(f"🔍 Search: 8 ultra-micro-{direction_name} complete → Long scan phase 2")
+                    self.log(f"🔍 Search: 20 pico-micro-{direction_name} complete → Long scan phase 2")
                 else:
                     self.search_step = 'turn_right'
                     direction_name = "right" if self.turn_direction == 'R' else "left"
-                    self.log(f"🔍 Search: Cycle {self.turn_spam_count}/8 complete → Next ultra-micro-{direction_name}")
+                    self.log(f"🔍 Search: Cycle {self.turn_spam_count}/20 complete → Next pico-micro-{direction_name}")
                 
         elif self.search_step == 'scan2':
-            # Extended second scanning phase - very long pause
-            if current_time - self.search_last_command_time > 6.0:  # 6 second extended scan
+            # Ultra-extended second scanning phase - very long pause
+            if current_time - self.search_last_command_time > 10.0:  # 10 second ultra-extended scan
                 # Alternate direction for next cycle
                 self.turn_direction = 'L' if self.turn_direction == 'R' else 'R'
                 next_dir = "left" if self.turn_direction == 'L' else "right"
                 
                 self.search_last_command_time = current_time
                 self.search_step = 'scan1'  # Back to start
-                self.log(f"🔍 Search: 6s extended scan complete → Next ultra-slow cycle ({next_dir})")
+                self.log(f"🔍 Search: 10s ultra-extended scan complete → Next ultra-slow cycle ({next_dir})")
             
         # Extend search time for thorough scanning
         if current_time - self.search_start_time > 120:  # 2 minutes of thorough search
