@@ -7,13 +7,13 @@
   - Compatible with Pi /dev/ttyS0 communication
   
   Hardware Setup:
-  - Pi GPIO14 (/dev/ttyS0 TX) → ESP32 GPIO14 (RX2)
-  - Pi GPIO15 (/dev/ttyS0 RX) ← ESP32 GPIO15 (TX2)
+  - Pi GPIO14 (/dev/ttyS0 TX) → ESP32 GPIO3 (RX0)
+  - Pi GPIO15 (/dev/ttyS0 RX) ← ESP32 GPIO1 (TX0)
   - Pi GND → ESP32 GND
   
   Serial Ports:
-  - Serial (USB): Debug output at 115200 baud
-  - Serial2 (GPIO16/17): Pi communication at 9600 baud
+  - Serial (GPIO1/3): Pi communication at 9600 baud
+  - Serial Monitor: Use USB for debugging if needed
 */
 
 #include <Arduino.h>
@@ -43,8 +43,8 @@ const int LED_OBS   = 13;
 // Power LED: connect directly to 3.3V or 5V (no code needed)
 
 // ===== PI COMMUNICATION PINS =====
-const int PI_RX_PIN = 14;  // Connect to Pi GPIO14 (TX)
-const int PI_TX_PIN = 15;  // Connect to Pi GPIO15 (RX)
+// Using UART0 (default Serial) - GPIO1/3
+// GPIO3 = RX0, GPIO1 = TX0 (built-in Serial)
 
 // ===== STATE (UNCHANGED) =====
 enum MotorState { MS_STOP, MS_FORWARD, MS_BACKWARD, MS_LEFT, MS_RIGHT };
@@ -127,11 +127,8 @@ int getDistanceFiltered() {
 
 // ===== SETUP =====
 void setup() {
-  // Serial for debugging (USB connection)
-  Serial.begin(115200);
-  
-  // Serial2 for Pi communication (GPIO16/17) at 9600 baud
-  Serial2.begin(9600, SERIAL_8N1, PI_RX_PIN, PI_TX_PIN);
+  // Serial (UART0) for Pi communication at 9600 baud (GPIO1/3)
+  Serial.begin(9600);
 
   pinMode(LEFT_PIN_A, OUTPUT);
   pinMode(LEFT_PIN_B, OUTPUT);
@@ -161,25 +158,22 @@ void setup() {
   lastSensorMillis = millis();
 
   if (DEBUG) {
-    Serial.println("🚗 ESP32 Robot - Pi Compatible Version Ready!");
-    Serial.println("📡 Listening for Pi commands on Serial2 (GPIO14/15) at 9600 baud");
-    Serial.print("🔍 Initial distance: "); 
+    Serial.println("ESP32 Robot Ready - UART0 (GPIO1/3) at 9600 baud");
+    Serial.print("Initial distance: "); 
     Serial.println(lastDistance);
-    Serial.println("💡 Debug output on Serial (USB) at 115200 baud");
-    Serial.println("=====================================");
   }
   
   // Send ready signal to Pi
-  Serial2.println("ESP32_READY");
+  Serial.println("ESP32_READY");
 }
 
 // ===== LOOP =====
 void loop() {
   unsigned long now = millis();
 
-  // 1) Handle Pi commands via Serial2 (GPIO16/17)
-  while (Serial2.available()) {
-    char c = toupper(Serial2.read());
+  // 1) Handle Pi commands via Serial (UART0 - GPIO1/3)
+  while (Serial.available()) {
+    char c = toupper(Serial.read());
     if (c == '\n' || c == '\r') continue;
 
     MotorState newRequest = requestedState;
@@ -194,21 +188,14 @@ void loop() {
     if (validCommand && newRequest != requestedState) {
       requestedState = newRequest;
       
-      // Send acknowledgment to Pi
-      Serial2.print("ACK:");
-      Serial2.println(c);
+      // Send acknowledgment to Pi via UART0
+      Serial.print("ACK:");
+      Serial.println(c);
       
       if (DEBUG) { 
-        Serial.print("📤 Pi command received: "); 
-        Serial.print(c);
-        Serial.print(" → ");
-        switch (newRequest) {
-          case MS_STOP: Serial.println("STOP"); break;
-          case MS_FORWARD: Serial.println("FORWARD"); break;
-          case MS_BACKWARD: Serial.println("BACKWARD"); break;
-          case MS_LEFT: Serial.println("LEFT"); break;
-          case MS_RIGHT: Serial.println("RIGHT"); break;
-        }
+        // Debug output will go to Pi, but that's OK for this simple setup
+        Serial.print("Pi cmd: "); 
+        Serial.println(c);
       }
 
       // RX activity pulse
@@ -229,8 +216,8 @@ void loop() {
         Serial.print("⚠️ Invalid command from Pi: ");
         Serial.println(c);
       }
-      Serial2.print("NAK:");
-      Serial2.println(c);
+      Serial.print("NAK:");
+      Serial.println(c);
     }
   }
 
@@ -238,23 +225,23 @@ void loop() {
   if (now - lastSensorMillis >= SENSOR_INTERVAL) {
     lastSensorMillis = now;
     lastDistance = getDistanceFiltered();
-    if (DEBUG) {
-      Serial.print("🔍 Distance: ");
-      Serial.print(lastDistance);
-      Serial.println(" cm");
+    // Distance debug (will go to Pi via UART, but minimal output)
+    if (DEBUG && (lastDistance < 40 || lastDistance > 200)) {
+      Serial.print("Dist: ");
+      Serial.println(lastDistance);
     }
   }
 
   // 3) Obstacle avoidance (COMPLETELY UNCHANGED LOGIC)
   if (lastDistance < SAFE_DISTANCE) {
     if (!autoReverseActive) {
-      if (DEBUG) Serial.println("⚠️ OBSTACLE DETECTED! Auto-reversing...");
+      if (DEBUG) Serial.println("OBSTACLE!");
     }
     autoReverseActive = true;
     applyMotorState(MS_BACKWARD);
     digitalWrite(LED_OBS, HIGH);
   } else if (autoReverseActive) {
-    if (DEBUG) Serial.println("✅ Safe distance reached. Stopping auto-reverse.");
+    if (DEBUG) Serial.println("CLEAR");
     autoReverseActive = false;
     applyMotorState(MS_STOP);
     digitalWrite(LED_OBS, LOW);

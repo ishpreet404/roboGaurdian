@@ -375,7 +375,7 @@ class WindowsAIController:
         return 'F'
         
     def send_command(self, command, auto=False):
-        """Send movement command to Pi → ESP32 (GPIO14/15 UART)"""
+        """Send movement command to Pi → ESP32 (GPIO1/3 UART0)"""
         try:
             # Rate limiting - ESP32 obstacle avoidance needs time between commands
             current_time = time.time()
@@ -406,10 +406,10 @@ class WindowsAIController:
                     prefix = "🤖 Auto" if auto else "🎮 Manual"
                     
                     if uart_status == 'connected':
-                        self.log(f"{prefix}: {command} ✅ ESP32 via GPIO14/15")
+                        self.log(f"{prefix}: {command} ✅ ESP32 via GPIO1/3")
                     else:
                         self.log(f"{prefix}: {command} ⚠️ Pi OK, ESP32 UART issue")
-                        self.log(f"   Check: GPIO14/15 wiring, /dev/ttyS0 permissions")
+                        self.log(f"   Check: GPIO1/3 wiring, /dev/ttyS0 permissions")
                         
                 except Exception as e:
                     prefix = "🤖 Auto" if auto else "🎮 Manual"
@@ -468,7 +468,7 @@ class WindowsAIController:
                     if uart_status != 'connected':
                         status_msg += "⚠️  UART Issue Detected!\n"
                         status_msg += "Fix: Check GPIO wiring Pi↔ESP32\n"
-                        status_msg += "Pi GPIO14→ESP32 RX2, Pi GPIO15←ESP32 TX2\n\n"
+                        status_msg += "Pi GPIO14→ESP32 GPIO1, Pi GPIO15←ESP32 GPIO3\n\n"
                         
                     if camera_status != 'active':
                         status_msg += "⚠️  Camera Issue Detected!\n"

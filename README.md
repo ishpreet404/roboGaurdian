@@ -252,7 +252,7 @@ python gui_tester.py
 
 1. Check ESP32 serial monitor for command reception  - Statistics: FPS, subjects detected, tracking status, source info.
 
-2. Verify GPIO14/15 wiring Pi ↔ ESP32  - **Detector Settings**: Choose backend (Haar/SSD/YOLO), adjust confidence (0.1-0.9), download SSD model.
+2. Verify GPIO1/3 wiring Pi ↔ ESP32  - **Detector Settings**: Choose backend (Haar/SSD/YOLO), adjust confidence (0.1-0.9), download SSD model.
 
 3. Test UART: `python test_esp32.py`
 

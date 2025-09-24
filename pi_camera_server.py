@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
-🥧 Robot Guardia        # Hardware configuration for ESP32 GPIO14/15 communication
-        self.uart_port = '/dev/ttyS0'  # Pi GPIO14/15 → ESP32 GPIO14/15
-        self.baud_rate = 9600
-        self.uart = None
-        self.uart_connected = Falseaspberry Pi Camera Server
+🥧 Robot Guardian - Raspberry Pi Camera Server
 ==============================================
 
 Runs on Raspberry Pi to:
@@ -20,8 +16,8 @@ Requirements:
 Usage: python3 pi_camera_server.py
 
 Hardware Setup:
-- Pi GPIO14 (Pin 8, TX) → ESP32 GPIO16 (RX2)  
-- Pi GPIO15 (Pin 10, RX) ← ESP32 GPIO17 (TX2)
+- Pi GPIO14 (Pin 8, TX) → ESP32 GPIO1 (TX/D1)  
+- Pi GPIO15 (Pin 10, RX) ← ESP32 GPIO3 (RX/D3)
 - Pi GND (Pin 6) → ESP32 GND
 
 Author: Robot Guardian System
@@ -47,7 +43,8 @@ app = Flask(__name__)
 
 class PiCameraServer:
     def __init__(self):
-        # Hardware configuration
+        # Hardware configuration for ESP32 UART0 communication
+        # Pi GPIO14/15 → ESP32 GPIO1/3 (UART0)
         self.uart_port = '/dev/ttyS0'
         self.baud_rate = 9600
         self.uart = None

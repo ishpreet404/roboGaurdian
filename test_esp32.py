@@ -76,7 +76,7 @@ class ESP32Tester:
             print("\n❌ Cannot connect to Pi server!")
             print("Make sure:")
             print("1. Pi is running pi_camera_server.py")
-            print("2. ESP32 is connected via GPIO14/15") 
+            print("2. ESP32 is connected via GPIO1/3") 
             print("3. ESP32 has correct firmware uploaded")
             return
             
