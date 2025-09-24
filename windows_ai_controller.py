@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class WindowsAIController:
     def __init__(self):
         # ⚠️ UPDATE THESE URLs WITH YOUR PI ⚠️
-        self.PI_BASE_URL = "http://192.168.1.2:5000"  # Updated Pi IP from error log
+        self.PI_BASE_URL = "http://192.168.1.12:5000"  # Updated Pi IP from error log
         # OR use tunnel URL:
         # self.PI_BASE_URL = "https://your-tunnel-url.serveo.net"
         
@@ -310,10 +310,12 @@ class WindowsAIController:
                 # Auto tracking logic
                 if self.auto_tracking.get():
                     if detections:
-                        self.process_auto_tracking(detections, processed_frame.shape)
-                        # Reset search mode when person found
-                        if hasattr(self, 'search_active'):
+                        # Reset search mode when person found - send forward first for better movement
+                        if hasattr(self, 'search_active') and self.search_active:
                             self.search_active = False
+                            self.search_to_tracking_transition = True
+                            self.log("🎯 Person found - Transitioning to tracking mode")
+                        self.process_auto_tracking(detections, processed_frame.shape)
                     else:
                         # No person detected - activate search mode
                         self.process_search_mode()
@@ -332,6 +334,13 @@ class WindowsAIController:
     def process_auto_tracking(self, detections, frame_shape):
         """Process automatic person tracking"""
         if not detections or time.time() - self.last_command_time < self.command_cooldown:
+            return
+        
+        # Handle transition from search to tracking - send forward first
+        if hasattr(self, 'search_to_tracking_transition') and self.search_to_tracking_transition:
+            self.search_to_tracking_transition = False
+            self.send_command('F', auto=True)  # Forward first for smooth transition
+            self.log("🎯 Search→Track: Forward command sent first")
             return
             
         # Find the target person (largest if enabled, otherwise first)
@@ -363,32 +372,97 @@ class WindowsAIController:
             self.search_active = False
             self.search_start_time = 0
             self.search_last_command_time = 0
+            self.search_step = 'scan1'  # 'scan1' -> 'turn' -> 'scan2' -> 'pause'
         
         # Start search if not already active
         if not self.search_active:
             self.search_active = True
             self.search_start_time = current_time
             self.search_last_command_time = 0
-            self.log("🔍 No person detected - Starting 360° search")
+            self.search_step = 'scan1'
+            self.log("🔍 No person detected - Starting ultra-slow 360° search")
         
-        # Send search commands (slow turn with pauses)
-        if current_time - self.search_last_command_time > 0.4:  # 400ms between search commands
-            self.send_command('X', auto=True)  # X = search mode (slow right turn)
-            self.search_last_command_time = current_time
+        # Initialize turn spam counter for ultra-slow rotation
+        if not hasattr(self, 'turn_spam_count'):
+            self.turn_spam_count = 0
+            self.turn_direction = 'R'  # Start with right, then alternate L/R
+            self.micro_turn_count = 0  # Track individual micro-turns
             
-        # Stop search after reasonable time (30 seconds) and rest
-        if current_time - self.search_start_time > 30:
-            self.log("🔍 Search timeout - Stopping to conserve power")
+        # Extremely slow multi-phase search with maximum stops
+        if self.search_step == 'scan1':
+            # Extended first scanning phase - very long pause
+            if current_time - self.search_last_command_time > 8.0:  # 8 second deep scan
+                self.search_last_command_time = current_time
+                self.search_step = 'turn_right'
+                self.turn_spam_count = 0
+                self.micro_turn_count = 0
+                self.log("🔍 Search: 8s deep scan complete → Ultra-micro-turns")
+                
+        elif self.search_step == 'turn_right':
+            # Ultra-short turn commands with maximum control
+            if current_time - self.search_last_command_time > 0.01:  # 10ms ultra-micro-turn
+                self.send_command(self.turn_direction, auto=True)  # Turn (R or L)
+                self.search_last_command_time = current_time
+                self.search_step = 'turn_stop'
+                self.micro_turn_count += 1
+                direction_name = "right" if self.turn_direction == 'R' else "left"
+                self.log(f"🔍 Search: Ultra-micro-{direction_name} #{self.micro_turn_count}")
+                
+        elif self.search_step == 'turn_stop':
+            # Immediate stop after each ultra-micro-turn
+            if current_time - self.search_last_command_time > 0.005:  # 5ms then stop
+                self.send_command('S', auto=True)  # Stop
+                self.search_last_command_time = current_time
+                self.search_step = 'turn_pause1'
+                self.log(f"🔍 Search: STOP #{self.micro_turn_count}")
+                
+        elif self.search_step == 'turn_pause1':
+            # First pause phase - medium pause
+            if current_time - self.search_last_command_time > 1.5:  # 1.5s pause for detection
+                self.search_last_command_time = current_time
+                self.search_step = 'turn_pause2'
+                self.log("🔍 Search: Pause phase 1 → Pause phase 2")
+                
+        elif self.search_step == 'turn_pause2':
+            # Second pause phase - extended pause
+            if current_time - self.search_last_command_time > 2.0:  # 2s extended pause
+                self.search_last_command_time = current_time
+                self.turn_spam_count += 1
+                
+                # Do 8 ultra-micro turn cycles before moving to scan2
+                if self.turn_spam_count >= 8:
+                    self.search_step = 'scan2'
+                    direction_name = "right" if self.turn_direction == 'R' else "left"
+                    self.log(f"🔍 Search: 8 ultra-micro-{direction_name} complete → Long scan phase 2")
+                else:
+                    self.search_step = 'turn_right'
+                    direction_name = "right" if self.turn_direction == 'R' else "left"
+                    self.log(f"🔍 Search: Cycle {self.turn_spam_count}/8 complete → Next ultra-micro-{direction_name}")
+                
+        elif self.search_step == 'scan2':
+            # Extended second scanning phase - very long pause
+            if current_time - self.search_last_command_time > 6.0:  # 6 second extended scan
+                # Alternate direction for next cycle
+                self.turn_direction = 'L' if self.turn_direction == 'R' else 'R'
+                next_dir = "left" if self.turn_direction == 'L' else "right"
+                
+                self.search_last_command_time = current_time
+                self.search_step = 'scan1'  # Back to start
+                self.log(f"🔍 Search: 6s extended scan complete → Next ultra-slow cycle ({next_dir})")
+            
+        # Extend search time for thorough scanning
+        if current_time - self.search_start_time > 120:  # 2 minutes of thorough search
+            self.log("🔍 Search timeout (2 min) - Stopping to conserve power")
             self.send_command('S', auto=True)
             self.search_active = False
-            time.sleep(5)  # Rest for 5 seconds
+            time.sleep(10)  # Rest for 10 seconds
             
     def calculate_movement_command(self, center_x, center_y, area, frame_width, frame_height):
-        """Calculate robot movement based on person position with increased safety distance"""
-        # Thresholds - adjusted for increased safety
+        """Calculate robot movement based on person position with decreased distance"""
+        # Thresholds - adjusted for closer approach
         x_threshold = frame_width * 0.12  # 12% dead zone (tighter centering)
-        min_area = (frame_width * frame_height) * 0.025 # 2.5% minimum size (approach closer)
-        max_area = (frame_width * frame_height) * 0.25  # 25% maximum size (larger safety zone)
+        min_area = (frame_width * frame_height) * 0.08  # 8% minimum size (approach closer)
+        max_area = (frame_width * frame_height) * 0.45  # 45% maximum size (get much closer before stopping)
         
         frame_center_x = frame_width / 2
         offset_x = center_x - frame_center_x
@@ -418,13 +492,16 @@ class WindowsAIController:
         else:
             command = 'F'
         
-        # Ensure ESP32 gets time to process by alternating movement with stops
-        if command != 'S' and self.last_movement_command != 'S':
-            # If last command wasn't STOP and current isn't STOP, send STOP first
-            if current_time - self.last_movement_time > 0.3:  # 300ms since last movement
+        # Only add stops for turning commands (L/R), not forward (F)
+        if command in ['L', 'R'] and self.last_movement_command not in ['S', command]:
+            # For turns, ensure we stop first if coming from different movement
+            if current_time - self.last_movement_time > 0.2:  # 200ms since last movement
                 self.last_movement_command = 'S'
                 self.last_movement_time = current_time
                 return 'S'
+        
+        # Forward movement (F) - no forced stops, allow continuous movement
+        # Backward movement (B) and Stop (S) - immediate execution
         
         self.last_movement_command = command
         if command != 'S':
@@ -435,14 +512,15 @@ class WindowsAIController:
     def send_command(self, command, auto=False):
         """Send movement command to Pi → ESP32 (GPIO1/3 UART0)"""
         try:
-            # Rate limiting - Allow faster commands for movement/stop pattern
+            # Rate limiting - Different speeds for different commands
             current_time = time.time()
-            if current_time - self.last_command_time < 0.1:  # 100ms minimum for ESP32 processing
+            min_interval = 0.05 if command == 'F' else 0.1  # 50ms for forward, 100ms for others
+            if current_time - self.last_command_time < min_interval:
                 return
                 
             # Validate ESP32 command format (must be single uppercase letters)
-            if command not in ['F', 'B', 'L', 'R', 'S', 'X']:
-                self.log(f"❌ Invalid ESP32 command: {command}. Valid: F/B/L/R/S/X")
+            if command not in ['F', 'B', 'L', 'R', 'S']:
+                self.log(f"❌ Invalid ESP32 command: {command}. Valid: F/B/L/R/S")
                 return
                 
             url = f"{self.PI_BASE_URL}/move"

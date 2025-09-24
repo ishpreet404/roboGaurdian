@@ -214,17 +214,11 @@ void loop() {
     MotorState newRequest = requestedState;
     bool validCommand = false;
     
-    if (c == 'F') { newRequest = MS_FORWARD; validCommand = true; isSearchMode = false; }
-    else if (c == 'B') { newRequest = MS_BACKWARD; validCommand = true; isSearchMode = false; }
-    else if (c == 'L') { newRequest = MS_LEFT; validCommand = true; isSearchMode = false; }
-    else if (c == 'R') { newRequest = MS_RIGHT; validCommand = true; isSearchMode = false; }
-    else if (c == 'S') { newRequest = MS_STOP; validCommand = true; isSearchMode = false; }
-    else if (c == 'X') { // Search mode - slow 360 turn
-      newRequest = MS_RIGHT; 
-      validCommand = true; 
-      isSearchMode = true;
-      if (DEBUG) Serial.println("🔍 Search mode activated");
-    }
+    if (c == 'F') { newRequest = MS_FORWARD; validCommand = true; }
+    else if (c == 'B') { newRequest = MS_BACKWARD; validCommand = true; }
+    else if (c == 'L') { newRequest = MS_LEFT; validCommand = true; }
+    else if (c == 'R') { newRequest = MS_RIGHT; validCommand = true; }
+    else if (c == 'S') { newRequest = MS_STOP; validCommand = true; }
 
     if (validCommand && newRequest != requestedState) {
       requestedState = newRequest;
@@ -247,18 +241,23 @@ void loop() {
       // Update direction LEDs
       updateDirectionLEDs(requestedState);
 
-      // Start timed movement execution
+      // Handle movement execution
       if (newRequest == MS_STOP) {
         // Stop immediately
         autoReverseActive = false;
         applyMotorState(MS_STOP);
         isExecutingMovement = false;
-      } else {
-        // Start timed movement
+      } else if (newRequest == MS_LEFT || newRequest == MS_RIGHT) {
+        // Start timed movement for turns only
         movementStartTime = millis();
         isExecutingMovement = true;
+        autoReverseActive = false;
+        applyMotorState(newRequest);
+      } else {
+        // Forward/Backward - immediate execution, no timing
+        autoReverseActive = false;
+        isExecutingMovement = false;
         if (newRequest != MS_FORWARD) {
-          autoReverseActive = false;
           applyMotorState(newRequest);
         }
       }
@@ -292,29 +291,29 @@ void loop() {
     }
   }
 
-  // 3) Handle timed movements
+  // 3) Handle timed movements (only for L/R turns, F is continuous)
   if (isExecutingMovement && !autoReverseActive) {
     unsigned long elapsed = millis() - movementStartTime;
-    unsigned long targetDuration = isSearchMode ? SEARCH_TURN_DURATION : MOVEMENT_DURATION;
     
-    if (elapsed >= targetDuration) {
-      // Movement time completed, stop and wait
-      applyMotorState(MS_STOP);
-      isExecutingMovement = false;
-      
-      if (DEBUG) {
-        if (isSearchMode) {
-          Serial.println("🔍 Search turn completed, pausing");
-        } else {
-          Serial.print("Movement completed, stopping for ");
+    // Only time-limit turning movements (L/R), not forward (F)
+    if (requestedState == MS_LEFT || requestedState == MS_RIGHT) {
+      if (elapsed >= MOVEMENT_DURATION) {
+        // Turn time completed, stop and wait
+        applyMotorState(MS_STOP);
+        isExecutingMovement = false;
+        
+        if (DEBUG) {
+          Serial.print("Turn completed, stopping for ");
           Serial.print(STOP_DURATION);
           Serial.println("ms");
         }
+        
+        // Brief pause for turn processing
+        delay(STOP_DURATION);
       }
-      
-      // Brief pause for frame processing (longer for search mode)
-      unsigned long pauseDuration = isSearchMode ? (STOP_DURATION + 50) : STOP_DURATION;
-      delay(pauseDuration);
+    } else {
+      // Forward/Backward movements are not time-limited (continuous until new command)
+      isExecutingMovement = false;
     }
   }
 
