@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-🥧 Robot Guardian - Raspberry Pi Camera Server
+🥧 Robot Guardia        # Hardware configuration for ESP32 GPIO14/15 communication
+        self.uart_port = '/dev/ttyS0'  # Pi GPIO14/15 → ESP32 GPIO14/15
+        self.baud_rate = 9600
+        self.uart = None
+        self.uart_connected = Falseaspberry Pi Camera Server
 ==============================================
 
 Runs on Raspberry Pi to:
@@ -44,7 +48,7 @@ app = Flask(__name__)
 class PiCameraServer:
     def __init__(self):
         # Hardware configuration
-        self.uart_port = '/dev/serial0'
+        self.uart_port = '/dev/ttyS0'
         self.baud_rate = 9600
         self.uart = None
         self.uart_connected = False
@@ -98,33 +102,34 @@ class PiCameraServer:
             
         # Initialize camera
         try:
-            # Try different camera indices
+            # Try different camera indices (Pi Camera or USB)
             for camera_id in [0, 1, -1]:
                 self.camera = cv2.VideoCapture(camera_id)
                 if self.camera.isOpened():
+                    logger.info(f"📹 Found camera at index {camera_id}")
                     break
                 else:
                     self.camera.release()
                     
             if not self.camera.isOpened():
-                raise Exception("No camera found")
+                raise Exception("No camera found - check camera connection")
                 
-            # Set camera properties
+            # Set optimized camera properties for robot streaming
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
             self.camera.set(cv2.CAP_PROP_FPS, self.fps)
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering for low latency
             
             # Test camera
             ret, test_frame = self.camera.read()
             if ret:
                 self.camera_active = True
-                logger.info(f"✅ Camera initialized: {self.frame_width}x{self.frame_height} @ {self.fps}fps")
+                logger.info(f"✅ Camera ready: {self.frame_width}x{self.frame_height} @ {self.fps}fps")
                 
                 # Start camera capture thread
                 threading.Thread(target=self.camera_capture_loop, daemon=True).start()
             else:
-                raise Exception("Camera test failed")
+                raise Exception("Camera test failed - check camera permissions")
                 
         except Exception as e:
             logger.error(f"❌ Camera initialization failed: {e}")
@@ -195,29 +200,35 @@ class PiCameraServer:
             return False
             
         try:
-            # Send command with newline
+            # Send single command character (ESP32 expects F, B, L, R, S)
             command_str = f"{command}\n"
             self.uart.write(command_str.encode('utf-8'))
             self.uart.flush()
             
-            # Try to read acknowledgment
+            # Try to read ESP32 acknowledgment (ACK:F or NAK:F)
             start_time = time.time()
             response = ""
             
-            while time.time() - start_time < 0.2:  # 200ms timeout
+            while time.time() - start_time < 0.5:  # 500ms timeout for ESP32 response
                 if self.uart.in_waiting > 0:
                     try:
                         response = self.uart.readline().decode('utf-8', errors='ignore').strip()
                         if response:
-                            logger.info(f"📤 Command {command} → ESP32: {response}")
+                            if response.startswith('ACK:'):
+                                logger.info(f"✅ Command {command} → ESP32: {response}")
+                            elif response.startswith('NAK:'):
+                                logger.warning(f"⚠️ ESP32 rejected command {command}: {response}")
+                            else:
+                                logger.info(f"📤 ESP32 response: {response}")
                             break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error(f"UART read error: {e}")
+                        break
                 time.sleep(0.01)
                 
             if not response:
-                logger.info(f"📤 Command {command} sent (no response)")
-                
+                logger.info(f"📤 Command {command} sent to ESP32 (no acknowledgment)")
+            
             self.commands_received += 1
             self.last_command_time = datetime.now()
             self.last_command = command

@@ -1,0 +1,10 @@
+# 🥧 One-liner wget commands for Raspberry Pi
+
+# Quick download (just the file):
+wget -O pi_camera_server.py https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/pi_camera_server.py
+
+# Or using curl if wget not available:
+curl -o pi_camera_server.py https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/pi_camera_server.py
+
+# Then run:
+python3 pi_camera_server.py

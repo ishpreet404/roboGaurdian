@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class WindowsAIController:
     def __init__(self):
         # ⚠️ UPDATE THESE URLs WITH YOUR PI ⚠️
-        self.PI_BASE_URL = "http://192.168.1.100:5000"  # Local Pi IP
+        self.PI_BASE_URL = "http://192.168.1.2:5000"  # Updated Pi IP from error log
         # OR use tunnel URL:
         # self.PI_BASE_URL = "https://your-tunnel-url.serveo.net"
         
@@ -240,20 +240,22 @@ class WindowsAIController:
                 stream_url = f"{self.PI_BASE_URL}/video_feed"
                 self.log(f"🔄 Connecting to Pi stream: {stream_url}")
                 
+                # Configure OpenCV for low-latency MJPEG streaming
                 self.cap = cv2.VideoCapture(stream_url)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
                 
                 if self.cap.isOpened():
                     self.tracking_active = True
                     self.pi_connected = True
                     
-                    self.root.after(0, lambda: self.connection_status.config(text="🟢 Connected", fg='lime'))
-                    self.log("✅ Connected to Pi camera stream")
+                    self.root.after(0, lambda: self.connection_status.config(text="🟢 Pi Connected", fg='lime'))
+                    self.log("✅ Connected to Pi camera → ESP32 system")
                     
-                    # Start video processing
+                    # Start video processing with AI
                     threading.Thread(target=self.process_video_stream, daemon=True).start()
                 else:
                     self.root.after(0, lambda: self.connection_status.config(text="❌ Stream Failed", fg='red'))
-                    self.log("❌ Failed to connect to Pi camera stream")
+                    self.log("❌ Pi camera stream failed - check Pi server status")
                     
             except Exception as e:
                 self.root.after(0, lambda: self.connection_status.config(text="❌ Error", fg='red'))
@@ -373,58 +375,163 @@ class WindowsAIController:
         return 'F'
         
     def send_command(self, command, auto=False):
-        """Send movement command to Pi"""
+        """Send movement command to Pi → ESP32 (GPIO14/15 UART)"""
         try:
-            # Rate limiting
+            # Rate limiting - ESP32 obstacle avoidance needs time between commands
             current_time = time.time()
-            if current_time - self.last_command_time < self.command_cooldown:
+            if current_time - self.last_command_time < 0.15:  # 150ms minimum for ESP32 processing
+                return
+                
+            # Validate ESP32 command format (must be single uppercase letters)
+            if command not in ['F', 'B', 'L', 'R', 'S']:
+                self.log(f"❌ Invalid ESP32 command: {command}. Valid: F/B/L/R/S")
                 return
                 
             url = f"{self.PI_BASE_URL}/move"
             data = {"direction": command}
             
-            response = requests.post(url, json=data, timeout=2)
+            self.log(f"📤 Windows → Pi → ESP32: {command}")
+            
+            response = requests.post(url, json=data, timeout=3)
             
             if response.status_code == 200:
                 self.commands_sent += 1
                 self.last_command_time = current_time
                 
-                prefix = "🤖 Auto" if auto else "🎮 Manual"
-                self.log(f"{prefix} command: {command}")
+                # Parse Pi server response for ESP32 status
+                try:
+                    result = response.json()
+                    uart_status = result.get('uart_status', 'unknown')
+                    message = result.get('message', '')
+                    prefix = "🤖 Auto" if auto else "🎮 Manual"
+                    
+                    if uart_status == 'connected':
+                        self.log(f"{prefix}: {command} ✅ ESP32 via GPIO14/15")
+                    else:
+                        self.log(f"{prefix}: {command} ⚠️ Pi OK, ESP32 UART issue")
+                        self.log(f"   Check: GPIO14/15 wiring, /dev/ttyS0 permissions")
+                        
+                except Exception as e:
+                    prefix = "🤖 Auto" if auto else "🎮 Manual"
+                    self.log(f"{prefix} command: {command} → Pi (response parse error: {e})")
+                    
             else:
                 self.log(f"❌ Command {command} failed: HTTP {response.status_code}")
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('message', 'Unknown error')
+                    self.log(f"   💬 Pi error: {error_msg}")
+                except:
+                    self.log(f"   💬 Raw response: {response.text[:100]}")
+                try:
+                    error_msg = response.json().get('message', 'Unknown error')
+                    self.log(f"   Error details: {error_msg}")
+                except:
+                    self.log(f"   Response: {response.text[:100]}")
                 
+        except requests.ConnectionError:
+            self.log(f"❌ Command {command} failed: Cannot connect to Pi at {self.PI_BASE_URL}")
+            self.log(f"   Check: 1) Pi running? 2) Correct IP? 3) Pi server started?")
         except requests.Timeout:
-            self.log(f"⏱️ Command {command} timeout")
+            self.log(f"⏱️ Command {command} timeout (Pi slow/busy)")
         except Exception as e:
             self.log(f"❌ Command {command} error: {e}")
             
     def test_pi_connection(self):
         """Test connection to Pi server"""
         def test():
+            pi_url = self.pi_url_var.get()
+            self.log(f"🔍 Testing Pi connection: {pi_url}")
+            
             try:
-                url = f"{self.pi_url_var.get()}/status"
+                # Test basic connectivity
+                url = f"{pi_url}/status"
+                self.log(f"📡 Checking status endpoint: {url}")
+                
                 response = requests.get(url, timeout=5)
                 
                 if response.status_code == 200:
                     data = response.json()
                     
+                    # Detailed diagnostics
+                    uart_status = data.get('uart_status', 'Unknown')
+                    camera_status = data.get('camera_status', 'Unknown')
+                    commands_received = data.get('commands_received', 0)
+                    
+                    status_msg = f"✅ Pi Connection Successful!\n\n"
+                    status_msg += f"🖥️  Pi Status: {data.get('status', 'Unknown')}\n"
+                    status_msg += f"📡 UART to ESP32: {uart_status}\n"
+                    status_msg += f"📹 Camera: {camera_status}\n"
+                    status_msg += f"🎮 Commands Received: {commands_received}\n"
+                    status_msg += f"⚡ Baud Rate: {data.get('baud_rate', 'Unknown')}\n\n"
+                    
+                    if uart_status != 'connected':
+                        status_msg += "⚠️  UART Issue Detected!\n"
+                        status_msg += "Fix: Check GPIO wiring Pi↔ESP32\n"
+                        status_msg += "Pi GPIO14→ESP32 RX2, Pi GPIO15←ESP32 TX2\n\n"
+                        
+                    if camera_status != 'active':
+                        status_msg += "⚠️  Camera Issue Detected!\n"
+                        status_msg += "Fix: Check camera connection\n\n"
+                        
+                    status_msg += "Ready for AI tracking!"
+                        
                     def show_result():
-                        messagebox.showinfo("Pi Connection Test", 
-                                          f"✅ Pi connection successful!\n\n"
-                                          f"Status: {data.get('status', 'Unknown')}\n"
-                                          f"UART: {data.get('uart_status', 'Unknown')}\n"
-                                          f"Camera: {data.get('camera_status', 'Unknown')}\n\n"
-                                          f"Ready to start tracking!")
+                        messagebox.showinfo("Pi Connection Test", status_msg)
                         
                     self.root.after(0, show_result)
                     self.log("✅ Pi connection test successful")
-                else:
-                    self.root.after(0, lambda: messagebox.showerror("Connection Failed", 
-                                                                   f"HTTP {response.status_code}"))
                     
+                    # Test video feed
+                    try:
+                        video_url = f"{pi_url}/video_feed"
+                        self.log(f"📹 Testing video feed: {video_url}")
+                        video_response = requests.get(video_url, timeout=3, stream=True)
+                        if video_response.status_code == 200:
+                            self.log("✅ Video feed accessible")
+                        else:
+                            self.log(f"⚠️ Video feed issue: HTTP {video_response.status_code}")
+                    except Exception as ve:
+                        self.log(f"⚠️ Video feed test failed: {ve}")
+                        
+                else:
+                    error_msg = f"❌ Pi Connection Failed\n\n"
+                    error_msg += f"HTTP Status: {response.status_code}\n"
+                    error_msg += f"URL: {url}\n\n"
+                    error_msg += "Troubleshooting:\n"
+                    error_msg += "1. Is Pi server running?\n"
+                    error_msg += "2. Correct IP address?\n"
+                    error_msg += "3. Network connectivity?"
+                    
+                    self.root.after(0, lambda: messagebox.showerror("Connection Failed", error_msg))
+                    self.log(f"❌ Pi connection failed: HTTP {response.status_code}")
+                    
+            except requests.ConnectionError:
+                error_msg = f"❌ Cannot Connect to Pi\n\n"
+                error_msg += f"URL: {pi_url}\n\n"
+                error_msg += "Troubleshooting:\n"
+                error_msg += "1. Pi server running?\n   python3 pi_camera_server.py\n\n"
+                error_msg += "2. Correct Pi IP address?\n\n"
+                error_msg += "3. Pi and Windows on same network?\n\n"
+                error_msg += "4. Pi firewall blocking port 5000?"
+                
+                self.root.after(0, lambda: messagebox.showerror("Connection Error", error_msg))
+                self.log(f"❌ Connection error: Cannot reach Pi at {pi_url}")
+                
+            except requests.Timeout:
+                error_msg = f"⏱️ Pi Connection Timeout\n\n"
+                error_msg += f"Pi is reachable but slow to respond.\n"
+                error_msg += f"Try again or check Pi performance."
+                
+                self.root.after(0, lambda: messagebox.showerror("Timeout Error", error_msg))
+                self.log(f"⏱️ Pi connection timeout")
+                
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Connection Error", str(e)))
+                error_msg = f"❌ Connection Error\n\n{str(e)}\n\n"
+                error_msg += "Check network and Pi server status."
+                
+                self.root.after(0, lambda: messagebox.showerror("Connection Error", error_msg))
+                self.log(f"❌ Connection error: {e}")
                 
         threading.Thread(target=test, daemon=True).start()
         
@@ -456,7 +563,7 @@ class WindowsAIController:
         """Update video display with processed frame"""
         try:
             # Resize frame for display
-            display_frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_FAST)
+            display_frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
             
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
