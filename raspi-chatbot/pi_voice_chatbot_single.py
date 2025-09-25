@@ -9,6 +9,7 @@ with Python 3.10+.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -54,6 +55,34 @@ def _env(key: str, default: Optional[str] = None) -> Optional[str]:
     if value is None or value == "":
         return default
     return value
+
+
+def _prepare_for_speech(text: str) -> str:
+    """Strip conversational markdown so the TTS engine sounds natural."""
+
+    if not text:
+        return text
+
+    cleaned = text
+    # Remove bold/italic markers
+    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+    cleaned = re.sub(r"\*(.*?)\*", r"\1", cleaned)
+    cleaned = re.sub(r"_(.*?)_", r"\1", cleaned)
+    # Strip inline code / code blocks
+    cleaned = re.sub(r"`{1,3}(.*?)`{1,3}", r"\1", cleaned, flags=re.DOTALL)
+    # Replace markdown links and images
+    cleaned = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", cleaned)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", cleaned)
+    # Remove HTML tags if present
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    # Remove leading list markers and headings
+    cleaned = re.sub(r"^\s*[-*+]\s+", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^\s*#+\s+", "", cleaned, flags=re.MULTILINE)
+    # Collapse leftover markdown residue
+    cleaned = cleaned.replace("**", "").replace("__", "")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -324,14 +353,39 @@ class BluetoothSpeaker:
             return
 
         language_code = language_code.lower()
-        for voice in self._engine.getProperty("voices"):
+        normalized = language_code.replace("-", "_")
+        candidates = [normalized]
+        if "_" in normalized:
+            candidates.append(normalized.split("_", 1)[0])
+        if normalized not in {"en", "en_in"}:
+            candidates.append("en")
+
+        # Additional keywords that often hint at Indian English voices
+        candidate_keywords = set(candidates)
+        candidate_keywords.update({normalized.replace("_", "-"), "india", "indian"})
+
+        selected_voice = None
+        voices = self._engine.getProperty("voices")
+        for voice in voices:
             languages = [
-                lang.decode("utf-8", "ignore") if isinstance(lang, bytes) else lang
+                lang.decode("utf-8", "ignore") if isinstance(lang, bytes) else str(lang)
                 for lang in voice.languages
             ]
-            if any(language_code in lang.lower() for lang in languages):
-                self._engine.setProperty("voice", voice.id)
+            haystack = {
+                voice.id.lower(),
+                voice.name.lower() if hasattr(voice, "name") else "",
+                *[lang.lower() for lang in languages],
+            }
+
+            if any(any(keyword in entry for entry in haystack) for keyword in candidate_keywords):
+                selected_voice = voice.id
                 break
+
+        if selected_voice:
+            self._engine.setProperty("voice", selected_voice)
+            print(f"🗣️  Using voice: {selected_voice}")
+        else:
+            print("ℹ️  Could not find a specific Indian English voice; using default voice.")
 
     def is_connected(self) -> bool:
         return self._connected
@@ -366,7 +420,7 @@ def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
     temperature = float(_env("TEMPERATURE", "0.7"))
     max_tokens = int(_env("MAX_RESPONSE_TOKENS", "600"))
     speech_rate = int(_env("SPEECH_RATE", "175"))
-    language = _env("LANGUAGE", "en")
+    language = _env("LANGUAGE", "en-in")
     speaker_identifier = _env("BLUETOOTH_DEVICE_IDENTIFIER")
 
     speaker = BluetoothSpeaker(speaker_identifier, voice_rate=speech_rate)
@@ -386,7 +440,11 @@ def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
         state_store,
         github_client,
         conversation_id=conversation_id,
-        system_prompt="You are a helpful assistant running on a Raspberry Pi.",
+        system_prompt=(
+            "You are Chirpy, the friendly RoboGuardian stationed on a Raspberry Pi. "
+            "Always greet users warmly, speak in upbeat yet concise language, and "
+            "offer practical help for robotics, safety, and day-to-day assistance."
+        ),
     )
 
     return convo_manager, speaker
@@ -421,7 +479,8 @@ def main() -> None:
                 continue
 
             print(f"Assistant: {reply}")
-            speaker.speak(reply)
+            speech_text = _prepare_for_speech(reply)
+            speaker.speak(speech_text)
     except KeyboardInterrupt:
         print("\n🔚 Keyboard interrupt received. Shutting down…")
     finally:
