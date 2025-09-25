@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+ENV/
+.env.local
+.env.*
+
+# Logs
+*.log
+*.out
+*.err
+
+# Byte-compiled
+*.so
+
+# Build artifacts
+build/
+dist/
+*.egg
+
+# Mac / Windows
+.DS_Store
+Thumbs.db
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Coverage / Reports
+.coverage
+coverage/
+htmlcov/
+pytest_cache/
+
+# Misc
+*.bak
+*.tmp
+.cache/

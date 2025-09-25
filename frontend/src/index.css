@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-surface text-foreground font-body antialiased;
+}
+
+.gradient-ring {
+  position: relative;
+}
+
+.gradient-ring::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: conic-gradient(
+    from 90deg at 50% 50%,
+    rgba(124, 92, 255, 0.4),
+    rgba(20, 205, 255, 0.4),
+    rgba(124, 92, 255, 0.4)
+  );
+  filter: blur(12px);
+  opacity: 0.6;
+}
