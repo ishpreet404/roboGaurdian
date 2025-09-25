@@ -23,7 +23,7 @@ except Exception:  # pragma: no cover - fallback applies when dependency missing
 
 
 def _load_dotenv(dotenv_path: Optional[str] = None) -> bool:
-    if callable(_dotenv_load):
+    if callable(_dotenv_load) and _dotenv_load is not _load_dotenv:
         return bool(_dotenv_load(dotenv_path))
 
     path = Path(dotenv_path or ".env")
