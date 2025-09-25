@@ -354,15 +354,27 @@ class BluetoothSpeaker:
 
         language_code = language_code.lower()
         normalized = language_code.replace("-", "_")
-        candidates = [normalized]
-        if "_" in normalized:
-            candidates.append(normalized.split("_", 1)[0])
-        if normalized not in {"en", "en_in"}:
-            candidates.append("en")
+        parts = normalized.split("_", 1)
+        base_lang = parts[0]
+        region = parts[1] if len(parts) > 1 else None
 
-        # Additional keywords that often hint at Indian English voices
-        candidate_keywords = set(candidates)
-        candidate_keywords.update({normalized.replace("_", "-"), "india", "indian"})
+        keywords: List[str] = []
+
+        def _add_keyword(value: Optional[str]) -> None:
+            if value and value not in keywords:
+                keywords.append(value)
+
+        _add_keyword(normalized)
+        _add_keyword(normalized.replace("_", "-"))
+        _add_keyword(base_lang)
+        _add_keyword(region)
+
+        if base_lang == "hi":
+            for extra in ("hin", "hindi", "भारतीय", "india", "indian"):
+                _add_keyword(extra)
+        elif base_lang == "en":
+            for extra in ("en_in", "en-gb", "indian", "india"):
+                _add_keyword(extra)
 
         selected_voice = None
         voices = self._engine.getProperty("voices")
@@ -377,7 +389,11 @@ class BluetoothSpeaker:
                 *[lang.lower() for lang in languages],
             }
 
-            if any(any(keyword in entry for entry in haystack) for keyword in candidate_keywords):
+            if any(
+                keyword in entry
+                for keyword in keywords
+                for entry in haystack
+            ):
                 selected_voice = voice.id
                 break
 
@@ -385,7 +401,7 @@ class BluetoothSpeaker:
             self._engine.setProperty("voice", selected_voice)
             print(f"🗣️  Using voice: {selected_voice}")
         else:
-            print("ℹ️  Could not find a specific Indian English voice; using default voice.")
+            print("ℹ️  Could not find a voice matching the requested language; using default voice.")
 
     def is_connected(self) -> bool:
         return self._connected
@@ -420,7 +436,7 @@ def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
     temperature = float(_env("TEMPERATURE", "0.7"))
     max_tokens = int(_env("MAX_RESPONSE_TOKENS", "600"))
     speech_rate = int(_env("SPEECH_RATE", "175"))
-    language = _env("LANGUAGE", "en-in")
+    language = _env("LANGUAGE", "hi-in")
     speaker_identifier = _env("BLUETOOTH_DEVICE_IDENTIFIER")
 
     speaker = BluetoothSpeaker(speaker_identifier, voice_rate=speech_rate)
@@ -442,8 +458,10 @@ def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
         conversation_id=conversation_id,
         system_prompt=(
             "You are Chirpy, the friendly RoboGuardian stationed on a Raspberry Pi. "
-            "Always greet users warmly, speak in upbeat yet concise language, and "
-            "offer practical help for robotics, safety, and day-to-day assistance."
+            "Always greet users warmly, keep replies upbeat yet concise, and offer "
+            "practical help for robotics, safety, and daily assistance. Respond "
+            "exclusively in natural Hindi written in Devanagari script—never use "
+            "English unless the user explicitly requests a translation." 
         ),
     )
 
@@ -458,6 +476,12 @@ def main() -> None:
         sys.exit(1)
 
     print("🤖 Raspberry Pi Chatbot ready. Type 'exit' to quit.")
+    intro_message = (
+        "नमस्ते, सत श्री अकाल, हेलो! मैं आपका मित्रवत रोबोट Chirpy हूँ। "
+        "आज मैं आपकी कैसे सहायता कर सकता हूँ?"
+    )
+    print(f"Assistant: {intro_message}")
+    speaker.speak(_prepare_for_speech(intro_message))
 
     try:
         while True:
