@@ -8,7 +8,17 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Optional, Tuple
+
+# Ensure the project packages are importable when running this file directly.
+if __package__ in {None, ""}:  # pragma: no cover - runtime environment setup
+    current_dir = Path(__file__).resolve().parent
+    candidate_paths = [current_dir, current_dir.parent]
+    for candidate in candidate_paths:
+        candidate_str = str(candidate)
+        if candidate.exists() and candidate_str not in sys.path:
+            sys.path.insert(0, candidate_str)
 
 from dotenv import load_dotenv
 

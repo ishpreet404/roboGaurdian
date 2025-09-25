@@ -59,6 +59,7 @@ sudo apt-get install -y \
   bluez-tools \
   pulseaudio \
   pulseaudio-module-bluetooth \
+  portaudio19-dev \
   libespeak-ng1 \
   espeak-ng \
   git

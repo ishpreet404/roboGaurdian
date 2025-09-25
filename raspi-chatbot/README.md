@@ -45,7 +45,12 @@ raspi-chatbot
    ```
 
 2. **Install Dependencies**:
-   Ensure you have Python 3 installed, then run:
+   Ensure you have Python 3 installed. On Raspberry Pi install system packages first:
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y bluez bluez-tools pulseaudio pulseaudio-module-bluetooth portaudio19-dev libespeak-ng1 espeak-ng python3-venv python3-pip
+   ```
+   Then install the Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
