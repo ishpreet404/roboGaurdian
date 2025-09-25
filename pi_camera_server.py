@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+
+@app.after_request
+def add_cors_headers(response):  # type: ignore[override]
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    response.headers['Access-Control-Max-Age'] = '3600'
+    return response
+
 class PiCameraServer:
     def __init__(self):
         # Hardware configuration for ESP32 UART0 communication
@@ -500,9 +509,11 @@ def video_feed():
         }
     )
 
-@app.route('/move', methods=['POST'])
+@app.route('/move', methods=['POST', 'OPTIONS'])
 def move_robot():
     """Handle robot movement commands"""
+    if request.method == 'OPTIONS':  # CORS preflight
+        return ('', 204)
     try:
         data = request.get_json()
         

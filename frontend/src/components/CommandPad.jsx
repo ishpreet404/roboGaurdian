@@ -10,7 +10,7 @@ import {
 } from '@heroicons/react/24/outline';
 
 const buttonClasses =
-  'flex flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/10 px-6 py-5 text-sm font-medium text-muted transition-all hover:-translate-y-1 hover:border-accent hover:bg-accent/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d1023] disabled:cursor-not-allowed disabled:opacity-60';
+  'flex h-24 flex-col items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/10 text-sm font-medium text-muted transition-all hover:-translate-y-1 hover:border-accent hover:bg-accent/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d1023] disabled:cursor-not-allowed disabled:opacity-60';
 
 const CommandPad = () => {
   const { sendCommand, isSending, lastResult } = useRobotCommands();
@@ -42,17 +42,19 @@ const CommandPad = () => {
         )}
       </AnimatePresence>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="mx-auto mt-4 grid max-w-xl grid-cols-3 gap-4">
+        <div aria-hidden className="h-24" />
         <motion.button
           whileTap={{ scale: 0.96 }}
           disabled={isSending}
-          className={`${buttonClasses} col-start-2`}
+          className={buttonClasses}
           onClick={() => sendCommand('forward')}
           aria-label="Move forward"
         >
-          <ArrowUpCircleIcon className="h-7 w-7 text-info" />
+          <ArrowUpCircleIcon className="h-8 w-8 text-info" />
           Forward
         </motion.button>
+        <div aria-hidden className="h-24" />
 
         <motion.button
           whileTap={{ scale: 0.96 }}
@@ -61,7 +63,7 @@ const CommandPad = () => {
           onClick={() => sendCommand('left')}
           aria-label="Turn left"
         >
-          <ArrowLeftCircleIcon className="h-7 w-7 text-info" />
+          <ArrowLeftCircleIcon className="h-8 w-8 text-info" />
           Left
         </motion.button>
 
@@ -72,7 +74,7 @@ const CommandPad = () => {
           onClick={() => sendCommand('stop')}
           aria-label="Emergency stop"
         >
-          <HandRaisedIcon className="h-7 w-7 text-warning" />
+          <HandRaisedIcon className="h-8 w-8" />
           Stop
         </motion.button>
 
@@ -83,20 +85,22 @@ const CommandPad = () => {
           onClick={() => sendCommand('right')}
           aria-label="Turn right"
         >
-          <ArrowRightCircleIcon className="h-7 w-7 text-info" />
+          <ArrowRightCircleIcon className="h-8 w-8 text-info" />
           Right
         </motion.button>
 
+        <div aria-hidden className="h-24" />
         <motion.button
           whileTap={{ scale: 0.96 }}
           disabled={isSending}
-          className={`${buttonClasses} col-start-2`}
+          className={buttonClasses}
           onClick={() => sendCommand('backward')}
           aria-label="Move backward"
         >
-          <ArrowDownCircleIcon className="h-7 w-7 text-info" />
+          <ArrowDownCircleIcon className="h-8 w-8 text-info" />
           Reverse
         </motion.button>
+        <div aria-hidden className="h-24" />
       </div>
     </div>
   );

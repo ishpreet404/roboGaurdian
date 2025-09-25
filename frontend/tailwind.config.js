@@ -2,6 +2,9 @@ export default {
 	content: ["./index.html", "./src/**/*.{js,jsx,ts,tsx}"],
 	theme: {
 		extend: {
+			screens: {
+				"3xl": "1920px",
+			},
 			colors: {
 				surface: "#070819",
 				surfaceAlt: "#101225",

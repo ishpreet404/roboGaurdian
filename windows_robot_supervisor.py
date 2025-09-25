@@ -112,8 +112,10 @@ class WindowsRobotSupervisor:
                 }
             return jsonify(data)
 
-        @app.route("/api/command", methods=["POST"])
+        @app.route("/api/command", methods=["POST", "OPTIONS"])
         def send_command() -> Any:
+            if request.method == "OPTIONS":
+                return ("", 204)
             payload = request.get_json(force=True, silent=True) or {}
             command = payload.get("command")
             if not command:
@@ -135,8 +137,10 @@ class WindowsRobotSupervisor:
 
             return jsonify({"status": "success"})
 
-        @app.route("/api/connect", methods=["POST"])
+        @app.route("/api/connect", methods=["POST", "OPTIONS"])
         def update_pi_url() -> Any:
+            if request.method == "OPTIONS":
+                return ("", 204)
             payload = request.get_json(force=True, silent=True) or {}
             new_url = payload.get("pi_base_url")
             if not new_url:

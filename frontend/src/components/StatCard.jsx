@@ -40,10 +40,10 @@ const StatCard = ({ title, value, icon: Icon, tone = 'accent', description }) =>
       animate="animate"
       variants={variants}
       transition={{ type: 'spring', stiffness: 130, damping: 18 }}
-      className={`relative overflow-hidden rounded-3xl border border-white/5 bg-[#0d1023]/70 p-6 shadow-card backdrop-blur-lg`}
+      className="relative flex h-full flex-col justify-between gap-6 overflow-hidden rounded-3xl border border-white/5 bg-[#0d1023]/70 p-7 shadow-card backdrop-blur-lg"
     >
       <div className={`absolute inset-0 bg-gradient-to-br ${gradient}`} />
-      <div className="relative flex items-start justify-between">
+      <div className="relative flex items-start justify-between gap-4">
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-[0.35em] text-muted">{title}</p>
           <p
@@ -60,7 +60,7 @@ const StatCard = ({ title, value, icon: Icon, tone = 'accent', description }) =>
           </div>
         )}
       </div>
-      {description && <p className="mt-4 text-sm text-muted">{description}</p>}
+      {description && <p className="text-sm leading-relaxed text-muted">{description}</p>}
     </motion.div>
   );
 };
