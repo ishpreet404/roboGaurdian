@@ -17,27 +17,30 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:  # Prefer python-dotenv when installed for full .env parsing support.
-    from dotenv import load_dotenv as _load_dotenv  # type: ignore
+    from dotenv import load_dotenv as _dotenv_load  # type: ignore
 except Exception:  # pragma: no cover - fallback applies when dependency missing
-    def _load_dotenv(dotenv_path: Optional[str] = None) -> bool:
-        path = Path(dotenv_path or ".env")
-        if not path.exists():
-            return False
+    _dotenv_load = None  # type: ignore
 
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            key = key.strip()
-            if key:
-                os.environ.setdefault(key, value.strip().strip('"\''))
-        return True
-else:  # Successful import, wrap for consistent signature.
-    def _load_dotenv(dotenv_path: Optional[str] = None) -> bool:
-        return bool(_load_dotenv(dotenv_path))
+
+def _load_dotenv(dotenv_path: Optional[str] = None) -> bool:
+    if callable(_dotenv_load):
+        return bool(_dotenv_load(dotenv_path))
+
+    path = Path(dotenv_path or ".env")
+    if not path.exists():
+        return False
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            os.environ.setdefault(key, value.strip().strip('"\''))
+    return True
 
 import requests  # type: ignore
 import pyttsx3  # type: ignore
