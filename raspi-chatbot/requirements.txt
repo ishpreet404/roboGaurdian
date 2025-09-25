@@ -1,0 +1,8 @@
+Flask
+requests
+pyaudio
+speechrecognition
+python-dotenv
+pytest
+pytest-mock
+pyttsx3

@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "raspi-chatbot"
+version = "0.1.0"
+description = "A chatbot application that utilizes a Raspberry Pi Bluetooth speaker and a GitHub model API."
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+requests = "^2.25.1"
+pygame = "^2.0.1"
+python-dotenv = "^1.0.0"
+pyttsx3 = "^2.90"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
