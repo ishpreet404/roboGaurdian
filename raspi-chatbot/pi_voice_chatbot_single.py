@@ -57,6 +57,19 @@ def _env(key: str, default: Optional[str] = None) -> Optional[str]:
     return value
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw = _env(key)
+    if raw is None:
+        return default
+
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _prepare_for_speech(text: str) -> str:
     """Strip conversational markdown so the TTS engine sounds natural."""
 
@@ -419,7 +432,7 @@ class BluetoothSpeaker:
 # ---------------------------------------------------------------------------
 # Application wiring
 # ---------------------------------------------------------------------------
-def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
+def build_app() -> Tuple[ConvoManager, BluetoothSpeaker, bool]:
     _load_dotenv()
 
     token = _env("GITHUB_TOKEN")
@@ -438,6 +451,7 @@ def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
     speech_rate = int(_env("SPEECH_RATE", "175"))
     language = _env("LANGUAGE", "hi-in")
     speaker_identifier = _env("BLUETOOTH_DEVICE_IDENTIFIER")
+    disconnect_on_exit = _env_bool("DISCONNECT_ON_EXIT", False)
 
     speaker = BluetoothSpeaker(speaker_identifier, voice_rate=speech_rate)
     speaker.set_voice(language)
@@ -465,12 +479,12 @@ def build_app() -> Tuple[ConvoManager, BluetoothSpeaker]:
         ),
     )
 
-    return convo_manager, speaker
+    return convo_manager, speaker, disconnect_on_exit
 
 
 def main() -> None:
     try:
-        convo_manager, speaker = build_app()
+        convo_manager, speaker, disconnect_on_exit = build_app()
     except SystemExit as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
@@ -508,7 +522,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n🔚 Keyboard interrupt received. Shutting down…")
     finally:
-        if "speaker" in locals():
+        if "speaker" in locals() and locals().get("disconnect_on_exit"):
             speaker.disconnect()
 
 
