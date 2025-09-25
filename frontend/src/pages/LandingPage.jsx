@@ -56,11 +56,11 @@ const specs = [
 
 const LandingPage = () => {
   return (
-    <div className="relative overflow-hidden bg-gradient-to-br from-[#0a0b1f] via-[#111225] to-[#1a1b2f]">
+    <div className="relative overflow-hidden bg-gradient-to-br from-surface via-surfaceAlt to-card">
       {/* Background Effects */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_50%,_rgba(124,92,255,0.3),_transparent_50%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,_rgba(56,189,248,0.2),_transparent_50%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_40%_90%,_rgba(74,222,128,0.2),_transparent_50%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_50%,_rgba(124,92,255,0.15),_transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,_rgba(124,92,255,0.08),_transparent_70%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_40%_90%,_rgba(124,92,255,0.06),_transparent_75%)]" />
 
       {/* Hero Section */}
       <section className="relative">
@@ -124,9 +124,9 @@ const LandingPage = () => {
 
             {/* Robot Showcase */}
             <div className="relative">
-              <div className="absolute -inset-4 rounded-3xl bg-gradient-to-r from-accent/30 via-info/20 to-success/30 blur-2xl" />
-              <div className="relative rounded-3xl border border-white/10 bg-[#0d1023]/80 p-8 shadow-2xl backdrop-blur-lg">
-                <div className="aspect-video rounded-2xl bg-gradient-to-br from-[#1a1d3a] to-[#0f1127] border border-white/5 overflow-hidden">
+              <div className="absolute -inset-4 rounded-3xl bg-gradient-to-r from-accent/20 via-accent/15 to-accent/10 blur-2xl" />
+              <div className="relative rounded-3xl border border-white/10 bg-card/80 p-8 shadow-2xl backdrop-blur-lg">
+                <div className="aspect-video rounded-2xl bg-gradient-to-br from-surfaceAlt to-surface border border-white/5 overflow-hidden">
                   <img
                     src="https://images.unsplash.com/photo-1546776310-eef45dd6d63c?w=800&h=600&fit=crop&crop=center&auto=format&q=80"
                     alt="Guardian One Robot"
@@ -188,7 +188,7 @@ const LandingPage = () => {
             {features.map((feature, index) => (
               <div
                 key={feature.title}
-                className="group relative rounded-3xl border border-white/5 bg-[#0d1023]/60 p-8 shadow-card backdrop-blur-lg transition-all duration-300 hover:-translate-y-2 hover:border-accent/40 hover:shadow-accent/20"
+                className="group relative rounded-3xl border border-white/5 bg-card/60 p-8 shadow-card backdrop-blur-lg transition-all duration-300 hover:-translate-y-2 hover:border-accent/40 hover:shadow-accent/20"
               >
                 <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/20 to-info/20 border border-accent/30 group-hover:from-accent/40 group-hover:to-info/40 transition-all duration-300">
                   <feature.icon className="h-8 w-8 text-accent" />
@@ -223,8 +223,8 @@ const LandingPage = () => {
             </div>
             
             <div className="relative">
-              <div className="absolute -inset-4 rounded-3xl bg-gradient-to-r from-success/20 via-accent/20 to-info/20 blur-2xl" />
-              <div className="relative rounded-3xl border border-white/10 bg-[#0d1023]/80 p-8 shadow-2xl backdrop-blur-lg">
+              <div className="absolute -inset-4 rounded-3xl bg-gradient-to-r from-accent/15 via-accent/10 to-accent/8 blur-2xl" />
+              <div className="relative rounded-3xl border border-white/10 bg-card/80 p-8 shadow-2xl backdrop-blur-lg">
                 <h4 className="font-display text-2xl font-semibold text-foreground mb-6">System Architecture</h4>
                 <div className="space-y-4">
                   <div className="flex items-center gap-4 p-4 rounded-2xl bg-success/10 border border-success/20">
@@ -258,7 +258,7 @@ const LandingPage = () => {
       {/* Call to Action */}
       <section className="relative py-24">
         <div className="mx-auto max-w-4xl px-6 text-center">
-          <div className="rounded-3xl border border-white/10 bg-[#0d1023]/80 p-12 shadow-2xl backdrop-blur-lg">
+          <div className="rounded-3xl border border-white/10 bg-card/80 p-12 shadow-2xl backdrop-blur-lg">
             <h3 className="font-display text-4xl font-bold text-foreground mb-6">
               Ready to Command Your Guardian?
             </h3>
