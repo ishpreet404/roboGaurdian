@@ -564,78 +564,39 @@ def _play_audio_file(file_path: str) -> bool:
 
 
 def _play_audio_file_direct(file_path: str) -> bool:
-    """Play audio file with Bluetooth support AND reliable fallbacks"""
+    """EMERGENCY RESTORE: Simple working audio playback"""
     extension = Path(file_path).suffix.lower()
     
-    # Progressive approach: Try Bluetooth-compatible methods first, then reliable fallbacks
-    commands = []
-    
-    # Method 1: Try Bluetooth-compatible PulseAudio (if available)
-    if extension in {'.wav', '.wave'}:
-        commands.append(['paplay', file_path])  # PulseAudio for WAV
-    
-    # Method 2: Try media players with Bluetooth support
-    commands.extend([
-        # MPV (handles most formats, Bluetooth-aware)
-        ['mpv', '--really-quiet', '--no-video', '--volume=80', file_path],
+    # Ultra-simple approach: Just the most reliable methods
+    commands = [
+        # Method 1: Basic aplay (your original working method)
+        ['aplay', file_path],
         
-        # FFplay (reliable, works with Bluetooth)
+        # Method 2: MPV (very reliable)
+        ['mpv', '--really-quiet', '--no-video', file_path],
+        
+        # Method 3: FFplay (backup)
         ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
-    ])
-    
-    # Method 3: FFmpeg conversions (try Bluetooth first, then ALSA)
-    commands.extend([
-        # Try PulseAudio output (Bluetooth-compatible)
-        ['ffmpeg', '-i', file_path, '-f', 'pulse', '-loglevel', 'error', 'default'],
-        
-        # Fallback to ALSA (your original working method)
-        ['ffmpeg', '-i', file_path, '-f', 'alsa', '-acodec', 'pcm_s16le',
-         '-ar', '22050', '-ac', '1', '-loglevel', 'error', 'default'],
-    ])
-    
-    # Method 4: ALSA direct (original working methods as final fallback)
-    if extension in {'.wav', '.wave'}:
-        commands.extend([
-            # Your original working ALSA commands
-            ['aplay', '-q', file_path],
-            ['aplay', '-D', 'hw:0,0', '-r', '22050', '-f', 'S16_LE', '-c', '1', file_path],
-        ])
-    
-    # Method 5: Last resort pygame (if everything else fails)
-    commands.append(['python3', '-c', f'''
-import pygame
-import sys
-try:
-    pygame.mixer.init()
-    pygame.mixer.music.load("{file_path}")
-    pygame.mixer.music.play()
-    while pygame.mixer.music.get_busy():
-        pygame.time.wait(100)
-    print("Pygame success")
-except Exception as e:
-    print(f"Pygame failed: {{e}}")
-    sys.exit(1)
-'''])
+    ]
 
     for i, command in enumerate(commands):
         try:
-            logger.debug('🎵 Trying audio method %d: %s', i+1, command[0])
-            result = subprocess.run(command, check=True, 
-                                  stdout=subprocess.DEVNULL, 
-                                  stderr=subprocess.PIPE,
-                                  text=True, timeout=30)
-            logger.info('🔊 Audio SUCCESS with method %d (%s)', i+1, command[0])
+            logger.info('🎵 Trying simple method %d: %s', i+1, command[0])
+            subprocess.run(command, check=True, 
+                          stdout=subprocess.DEVNULL, 
+                          stderr=subprocess.DEVNULL,
+                          timeout=30)
+            logger.info('✅ AUDIO SUCCESS with %s', command[0])
             return True
         except FileNotFoundError:
-            logger.debug('⏸️ Audio player %s not available', command[0])
+            logger.debug('⏸️ %s not available', command[0])
             continue
-        except subprocess.TimeoutExpired:
-            logger.warning('⏰ Audio timeout with %s', command[0])
+        except Exception as e:
+            logger.debug('⚠️ %s failed: %s', command[0], e)
             continue
-        except subprocess.CalledProcessError as exc:
-            stderr_msg = exc.stderr[:100] if exc.stderr else 'no error details'
-            logger.warning('⚠️ Audio method %d failed (%s): %s', i+1, command[0], stderr_msg)
-            continue
+
+    logger.error('❌ All simple audio methods failed')
+    return False
 
     # If we get here, all methods failed
     logger.error('❌ ALL audio methods failed for %s - Pi audio hardware issue?', file_path)
