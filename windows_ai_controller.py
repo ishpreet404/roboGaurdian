@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 class WindowsAIController:
     def __init__(self):
         # ⚠️ UPDATE THESE URLs WITH YOUR PI ⚠️
-        self.PI_BASE_URL = "http://192.168.1.12:5000"  # Updated Pi IP from error log
+        self.PI_BASE_URL = "http://192.168.27.192:5000"  # Updated Pi IP from error log
         # OR use tunnel URL:
         # self.PI_BASE_URL = "https://your-tunnel-url.serveo.net"
         
@@ -73,20 +73,25 @@ class WindowsAIController:
         self.current_fps = 0
         self.commands_sent = 0
         self.last_command_time = 0
-        self.command_cooldown = 0.3  # seconds between commands
+        self.command_cooldown = 0.1  # Reduced from 0.3 to 0.1 seconds for faster response
         # Gentle turn sequencing state
         self.pending_turn_sequence = None
         self.last_turn_sequence_info = {'stops_sent': 0, 'total_stops': 0}
 
-        # Inference performance tuning
-        self.inference_size = 320            # smaller size for faster inference (try 320 or 416)
-        self.max_inference_fps = 8          # cap inference to this FPS to reduce CPU load
+        # Inference performance tuning - OPTIMIZED
+        self.inference_size = 224            # Smaller size for much faster inference (224 vs 320)
+        self.max_inference_fps = 5           # Reduced from 8 to 5 FPS to prevent overload
         self.last_inference_time = 0
-        self.model_device = 'cpu'           # will be set appropriately when model loads
-        # Detection smoothing (avoid flicker)
-        self.detection_history = collections.deque(maxlen=8)  # store recent detection lists as (timestamp, detections)
-        self.detection_keep_seconds = 0.6  # keep recent detections for this many seconds to smooth display
-        self.crying_history = collections.deque(maxlen=8)  # store recent crying booleans for stability
+        self.model_device = 'cpu'            # will be set appropriately when model loads
+        self.inference_skip_frames = 6       # Skip 6 frames between inferences (every 6th frame)
+        self.current_skip_count = 0
+        self.model_retry_count = 0
+        self.max_model_retries = 3
+        self.model_crashed = False
+        # Detection smoothing (avoid flicker) - optimized for lower memory
+        self.detection_history = collections.deque(maxlen=6)  # Reduced from 8 to 6 for memory
+        self.detection_keep_seconds = 0.8   # Increased to smooth over longer period
+        self.crying_history = collections.deque(maxlen=6)     # Reduced for memory optimization
         
         # Connection status
         self.pi_connected = False
@@ -116,12 +121,16 @@ class WindowsAIController:
         self.streaming_thread = None
         self.stream_frame = None
         self.stream_lock = threading.Lock()
-        # Streaming performance tuning
-        self.stream_fps = 12           # target FPS for MJPEG stream (lower reduces latency & CPU)
-        self.jpeg_quality = 60         # JPEG quality for stream (lower reduces size and latency)
+        # Streaming performance tuning - OPTIMIZED
+        self.stream_fps = 15           # Increased for smoother display
+        self.jpeg_quality = 50         # Lower quality for better performance  
         # Display throttling to avoid PhotoImage overload on main thread
-        self.display_fps = 12
+        self.display_fps = 20          # Increased for more responsive display
         self._last_display_time = 0
+        
+        # Memory management
+        self.last_cleanup_time = 0
+        self.cleanup_interval = 10.0   # Clean up every 10 seconds
         
         # Initialize pygame for audio alerts
         try:
@@ -328,31 +337,53 @@ class WindowsAIController:
         self.update_performance_display()
         
     def load_yolo_model(self):
-        """Load YOLO model in background"""
+        """Load YOLO model in background with error recovery"""
         def load_model():
             try:
-                self.log("🧠 Loading YOLO model...")
-                # Choose device: prefer CUDA when available
+                self.log("🧠 Loading optimized YOLO model...")
+                # Choose device: prefer CPU for stability on resource-constrained systems
                 try:
-                    if torch.cuda.is_available():
+                    import torch
+                    if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory > 2e9:
                         self.model_device = 'cuda'
+                        self.log("🎯 Using CUDA (sufficient VRAM detected)")
                     else:
                         self.model_device = 'cpu'
+                        self.log("🎯 Using CPU (recommended for stability)")
                 except Exception:
                     self.model_device = 'cpu'
+                    self.log("🎯 Using CPU (torch not available)")
 
+                # Load with optimizations for stability
                 self.model = YOLO('yolov8n.pt')  # Nano version for speed
-                # If the ultralytics API supports moving to device, do it (best-effort)
+                
+                # Configure model for optimal performance
                 try:
-                    self.model.to(self.model_device)
-                except Exception:
-                    pass
+                    if hasattr(self.model, 'to'):
+                        self.model.to(self.model_device)
+                    # Set model to evaluation mode for consistency
+                    if hasattr(self.model.model, 'eval'):
+                        self.model.model.eval()
+                except Exception as e:
+                    self.log(f"⚠️ Model optimization warning: {e}")
+                    
                 self.model_loaded = True
+                self.model_crashed = False
+                self.model_retry_count = 0
                 self.root.after(0, lambda: self.model_label.config(text="Model: YOLOv8n Ready ✅", fg='lime'))
                 self.log("✅ YOLO model loaded successfully")
+                
             except Exception as e:
+                self.model_retry_count += 1
+                self.model_crashed = True
                 self.root.after(0, lambda: self.model_label.config(text="Model: Error ❌", fg='red'))
-                self.log(f"❌ Failed to load YOLO model: {e}")
+                self.log(f"❌ Failed to load YOLO model (attempt {self.model_retry_count}): {e}")
+                
+                # Retry logic
+                if self.model_retry_count < self.max_model_retries:
+                    self.log(f"🔄 Retrying model load in 5 seconds...")
+                    time.sleep(5)
+                    load_model()  # Recursive retry
                 
         threading.Thread(target=load_model, daemon=True).start()
     
@@ -425,28 +456,64 @@ class WindowsAIController:
                 with self.frame_lock:
                     self.current_frame = frame.copy()
                 
-                # Run YOLO detection if model is loaded
+                # Run YOLO detection with optimized frame skipping and error handling
                 processed_frame = frame.copy()
                 detections = []
+
+                # Implement frame skipping for better performance
+                self.current_skip_count += 1
+                skip_inference = self.current_skip_count < self.inference_skip_frames
 
                 # Throttle inference to target FPS and resize for faster processing
                 now = time.time()
                 min_interval = 1.0 / float(self.max_inference_fps)
-                do_infer = (now - self.last_inference_time) >= min_interval
+                time_based_skip = (now - self.last_inference_time) < min_interval
 
-                if self.model_loaded and self.model and do_infer:
+                should_run_inference = (self.model_loaded and self.model and 
+                                      not self.model_crashed and 
+                                      not skip_inference and 
+                                      not time_based_skip)
+
+                if should_run_inference:
                     try:
-                        # Pass imgsz and device to model call for faster inference
-                        results = self.model(frame, classes=[0], conf=self.confidence_threshold.get(), imgsz=self.inference_size, device=self.model_device, verbose=False)
+                        # Reset skip counter
+                        self.current_skip_count = 0
+                        
+                        # Resize frame before inference to reduce processing load
+                        inference_frame = cv2.resize(frame, (self.inference_size, self.inference_size))
+                        
+                        # Run inference with error handling
+                        results = self.model(inference_frame, 
+                                           classes=[0],  # Person class only
+                                           conf=self.confidence_threshold.get(), 
+                                           imgsz=self.inference_size, 
+                                           device=self.model_device, 
+                                           verbose=False,
+                                           half=False)  # Disable half precision for stability
+                        
                         self.last_inference_time = now
 
                         if len(results) > 0 and len(results[0].boxes) > 0:
+                            # Scale coordinates back to original frame size
+                            orig_h, orig_w = frame.shape[:2]
+                            scale_x = orig_w / self.inference_size
+                            scale_y = orig_h / self.inference_size
+                            
                             # Iterate detections
                             boxes = results[0].boxes.xyxy.cpu().numpy()
                             confidences = results[0].boxes.conf.cpu().numpy()
                             for i, (box, conf) in enumerate(zip(boxes, confidences)):
+                                # Scale back to original coordinates
                                 x1, y1, x2, y2 = box.astype(int)
-                                detections.append({'box': (x1, y1, x2, y2), 'confidence': float(conf), 'area': (x2 - x1) * (y2 - y1)})
+                                x1 = int(x1 * scale_x)
+                                y1 = int(y1 * scale_y)
+                                x2 = int(x2 * scale_x)
+                                y2 = int(y2 * scale_y)
+                                detections.append({
+                                    'box': (x1, y1, x2, y2), 
+                                    'confidence': float(conf), 
+                                    'area': (x2 - x1) * (y2 - y1)
+                                })
 
                         # Save detection snapshot for smoothing
                         if detections:
@@ -454,7 +521,23 @@ class WindowsAIController:
 
                     except Exception as e:
                         self.log(f"⚠️ YOLO detection error: {e}")
-                        time.sleep(0.05)
+                        self.model_crashed = True
+                        self.model_retry_count += 1
+                        
+                        # Try to recover if not too many failures
+                        if self.model_retry_count <= self.max_model_retries:
+                            self.log(f"🔄 Attempting model recovery ({self.model_retry_count}/{self.max_model_retries})")
+                            try:
+                                # Clear GPU memory if using CUDA
+                                if self.model_device == 'cuda':
+                                    import torch
+                                    torch.cuda.empty_cache()
+                                # Reinitialize model
+                                self.model_loaded = False
+                                self.load_yolo_model()
+                            except Exception as recovery_e:
+                                self.log(f"❌ Model recovery failed: {recovery_e}")
+                        time.sleep(0.1)
 
                 # If we skipped inference or had no detections, try to reuse recent detections for smoothing
                 if not detections:
@@ -521,6 +604,12 @@ class WindowsAIController:
 
                 # Finish any turn sequences that may have pending stop commands
                 self.process_turn_sequence()
+                
+                # Memory cleanup every 10 seconds
+                now_cleanup = time.time()
+                if now_cleanup - self.last_cleanup_time > self.cleanup_interval:
+                    self.cleanup_memory()
+                    self.last_cleanup_time = now_cleanup
                 
             except Exception as e:
                 self.log(f"❌ Video processing error: {e}")
@@ -1627,10 +1716,41 @@ class WindowsAIController:
         finally:
             self.cleanup()
     
+    def cleanup_memory(self):
+        """Periodic memory cleanup to prevent accumulation"""
+        try:
+            # Clean old detection history
+            now = time.time()
+            self.detection_history = collections.deque([
+                (ts, dets) for ts, dets in self.detection_history 
+                if now - ts <= self.detection_keep_seconds
+            ], maxlen=self.detection_history.maxlen)
+            
+            # Clean old crying history
+            self.crying_history = collections.deque([
+                (ts, score) for ts, score in self.crying_history 
+                if now - ts <= self.crying_window_seconds
+            ], maxlen=self.crying_history.maxlen)
+            
+            # GPU memory cleanup if using CUDA
+            if self.model_device == 'cuda' and self.model_loaded:
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            self.log(f"⚠️ Memory cleanup error: {e}")
+
     def cleanup(self):
         """Clean up resources on exit"""
         self.stop_tracking()
         self.stop_internet_streaming()
+        
+        # Final memory cleanup
+        self.cleanup_memory()
         
         if self.audio_available:
             try:

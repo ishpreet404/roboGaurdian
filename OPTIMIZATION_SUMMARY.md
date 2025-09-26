@@ -1,14 +1,20 @@
-# 🚀 Robot Guardian - Optimization Summary
+# 🚀 Robot Guardian - AI Controller Optimization Summary
 
-## Performance Optimizations Completed
+## Model Lag & Crash Issues Fixed 🔧
 
-### 1. Import Organization & Loading ⚡
-- **Conditional MediaPipe import**: Only imports if available, graceful fallback to OpenCV
-- **Lazy YOLO loading**: Model loads in background thread to prevent GUI blocking
-- **Import cleanup**: Removed unused imports and organized remaining ones
+### 1. YOLO Model Optimization ⚡
+- **Frame Skipping**: Only process every 6th frame (massive CPU reduction)
+- **Smaller Inference Size**: 224px vs 320px (faster processing)
+- **Reduced Max FPS**: 5 FPS vs 8 FPS inference (prevents overload)
+- **Pre-resize Frames**: Resize before inference instead of scaling after
+- **Coordinate Scaling**: Properly scale detection boxes back to original frame size
 
-### 2. Video Processing Pipeline 🎥
-- **Smart frame copying**: Only copies frames when enhancements are actually enabled
+### 2. Model Crash Recovery 🛡️
+- **Crash Detection**: Monitors inference errors and flags model state
+- **Auto Recovery**: Reinitializes model after crashes with retry logic (3 attempts)
+- **Device Management**: Conservative GPU selection, prefers CPU on low VRAM systems
+- **Memory Cleanup**: Automatic GPU cache clearing to prevent CUDA OOM errors
+- **Stability Mode**: Disabled half-precision and enabled evaluation mode
 - **Optimized enhance_frame()**: Early return if no enhancements needed
 - **Buffer optimization**: Set `CAP_PROP_BUFFERSIZE=1` for minimal latency
 - **Rate-limited display updates**: GUI updates limited to 30 FPS max
