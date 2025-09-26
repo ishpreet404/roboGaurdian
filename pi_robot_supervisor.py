@@ -72,7 +72,31 @@ class PiRobotSupervisor:
     # ------------------------------------------------------------------
     def run_voice_console(self) -> None:
         print("🎙️  Initialising Chirpy voice assistant…")
-        convo_manager, speaker, disconnect_on_exit = voice_chatbot.build_app()
+        # build_app may raise SystemExit on missing env or return either
+        # (convo_manager, speaker, disconnect_on_exit) or (convo_manager, speaker)
+        try:
+            result = voice_chatbot.build_app()
+        except SystemExit as exc:  # expected when env/config is missing
+            print(f"⚠️ Voice chatbot startup error: {exc}")
+            return
+        except Exception as exc:  # unexpected errors
+            print(f"⚠️ Unexpected error while initializing voice chatbot: {exc}")
+            return
+
+        # Normalize return value to (convo_manager, speaker, disconnect_on_exit)
+        disconnect_on_exit = False
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                convo_manager, speaker, disconnect_on_exit = result
+            elif len(result) == 2:
+                convo_manager, speaker = result
+                disconnect_on_exit = False
+            else:
+                print("⚠️ build_app() returned unexpected number of values. Aborting voice console.")
+                return
+        else:
+            print("⚠️ build_app() did not return a tuple. Aborting voice console.")
+            return
 
         intro = (
             "नमस्ते! मैं Chirpy हूँ। सिस्टम तैयार है और कैमरा सर्वर बैकग्राउंड में चल रहा है। \n"
