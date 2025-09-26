@@ -6,12 +6,22 @@ A complete AI-powered person tracking robot system using Raspberry Pi, ESP32, an
 
 ## 🔔 Latest updates
 
+### 🎤 NEW: Real-Time Audio Chat & Enhanced Voice Features
+- **Audio Chat**: Record voice messages from your laptop microphone and send them directly to the Pi speaker for instant two-way communication
+- **Multi-Engine Hindi TTS**: Enhanced text-to-speech system with gTTS for quality, pyttsx3 for offline use, and espeak as fallback
+- **Smart Reminder System**: Schedule voice reminders with detailed logging and automatic delivery through the Pi speaker
+- **Voice Assistant Dashboard**: New `/assistant` page in the frontend with comprehensive voice communication controls
+
+### 🤖 Assistant & Communication Features  
 - Dashboard now includes a **Chirpy assistant console** that lets you chat with the Pi voice agent directly from the browser. All requests are relayed over the new `/assistant/message` API.
 - A **reminder scheduler with optional voice notes** is exposed at `/assistant/reminders`, allowing timed announcements that play automatically through the Pi speaker.
 - Cross-origin requests are enabled on the Pi server so the Vite frontend can dispatch robot commands and assistant actions without extra proxies.
 - Introduced **multi-mode behaviour**—including Care Companion, Watchdog, and Edumate—with synced alerts, dashboard controls to silence alarms, and automatic history summaries.
+
+### 📋 Setup & Usage
 - 📘 For fresh installs, follow the end-to-end [deployment & usage guide](./SETUP_AND_USAGE.md).
 - 🛠️ Want a speaker-only Pi? Leave `PI_ASSISTANT_MODE` at the default `fallback` and skip the GitHub Models token—voice notes still play through the on-device TTS engine.
+- 🎤 To use audio chat: Update Pi server with `wget -O pi_camera_server.py 'https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/pi_camera_server_fixed.py'`
 
 
 

@@ -3,24 +3,37 @@
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>🎤 Robot Audio Chat Test</title>
+		<title>🤖 Robot Control Dashboard</title>
 		<style>
 			body {
-				font-family: Arial, sans-serif;
-				max-width: 800px;
-				margin: 50px auto;
+				font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+				max-width: 1200px;
+				margin: 20px auto;
 				padding: 20px;
-				background: #f5f5f5;
+				background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+				color: #333;
+				min-height: 100vh;
 			}
 			.container {
-				background: white;
+				background: rgba(255, 255, 255, 0.95);
 				padding: 30px;
-				border-radius: 10px;
-				box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+				border-radius: 15px;
+				box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+				backdrop-filter: blur(10px);
+				margin-bottom: 20px;
 			}
 			h1 {
 				text-align: center;
-				color: #333;
+				color: #2c3e50;
+				margin-bottom: 30px;
+				font-size: 2.5em;
+				text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+			}
+			.dashboard-grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+				gap: 20px;
+				margin-top: 20px;
 			}
 			.control-group {
 				margin: 20px 0;
@@ -169,25 +182,51 @@
 							echoCancellation: true,
 							noiseSuppression: true,
 							autoGainControl: true,
+							sampleRate: 16000, // Lower sample rate for Pi compatibility
+							channelCount: 1,   // Mono audio
 						},
 					});
 
 					recordedChunks = [];
-					mediaRecorder = new MediaRecorder(stream);
+					
+					// Choose the best format for Pi compatibility
+					let options = {};
+					if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+						options = {
+							mimeType: 'audio/webm;codecs=opus',
+							audioBitsPerSecond: 48000  // Good quality for speech
+						};
+					} else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+						options = {
+							mimeType: 'audio/mp4',
+							audioBitsPerSecond: 64000
+						};
+					} else if (MediaRecorder.isTypeSupported('audio/webm')) {
+						options = {
+							mimeType: 'audio/webm',
+							audioBitsPerSecond: 48000
+						};
+					}
+					
+					mediaRecorder = new MediaRecorder(stream, options);
+					console.log('🎤 Recording with format:', mediaRecorder.mimeType, 'bitrate:', options.audioBitsPerSecond);
 
 					mediaRecorder.ondataavailable = (e) => {
 						if (e.data.size > 0) recordedChunks.push(e.data);
 					};
 
 					mediaRecorder.onstop = () => {
-						recordedBlob = new Blob(recordedChunks, { type: "audio/wav" });
+						// Use the actual recorded format, not fake WAV
+						const actualMimeType = mediaRecorder.mimeType || 'audio/webm';
+						recordedBlob = new Blob(recordedChunks, { type: actualMimeType });
+						
 						playBtn.disabled = false;
 						sendBtn.disabled = false;
 						recordingStatus.innerHTML =
-							'<div class="info">✅ Recording complete! You can now play or send to Pi.</div>';
+							`<div class="info">✅ Recording complete! Format: ${actualMimeType.split(';')[0]}. You can now play or send to Pi.</div>`;
 					};
 
-					mediaRecorder.start();
+					mediaRecorder.start(1000); // Record in 1-second chunks for better quality
 					recordBtn.textContent = "⏹️ Stop Recording";
 					recordBtn.classList.add("recording");
 					recordingStatus.innerHTML =
@@ -223,7 +262,19 @@
 				}
 
 				const formData = new FormData();
-				formData.append("file", recordedBlob, "mic_audio.wav");
+				
+				// Use proper filename based on actual format
+				let filename = "mic_audio.webm";
+				if (recordedBlob.type.includes('mp4')) {
+					filename = "mic_audio.mp4";
+				} else if (recordedBlob.type.includes('wav')) {
+					filename = "mic_audio.wav";
+				} else if (recordedBlob.type.includes('ogg')) {
+					filename = "mic_audio.ogg";
+				}
+				
+				formData.append("file", recordedBlob, filename);
+				console.log(`Sending audio file: ${filename}, type: ${recordedBlob.type}, size: ${recordedBlob.size} bytes`);
 
 				try {
 					showStatus("📡 Sending audio to Pi speaker...", "info");

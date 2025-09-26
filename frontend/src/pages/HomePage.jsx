@@ -71,17 +71,30 @@ const HomePage = () => {
             <div className="rounded-3xl border border-white/5 bg-[#0d1023]/80 p-8 shadow-card backdrop-blur-lg">
               <h3 className="font-display text-2xl text-foreground mb-6">Quick Actions</h3>
               <div className="space-y-4">
-                <button className="w-full rounded-2xl bg-accent/10 border border-accent/20 p-4 text-left transition hover:bg-accent/20 hover:border-accent/40">
-                  <div className="font-semibold text-accent mb-1">Voice Commands</div>
-                  <div className="text-sm text-muted">Test Hindi voice assistant</div>
+                <button 
+                  onClick={() => window.location.href = '/assistant'}
+                  className="w-full rounded-2xl bg-accent/10 border border-accent/20 p-4 text-left transition hover:bg-accent/20 hover:border-accent/40"
+                >
+                  <div className="font-semibold text-accent mb-1">🎤 Audio Chat</div>
+                  <div className="text-sm text-muted">Record and send voice to Pi speaker</div>
                 </button>
-                <button className="w-full rounded-2xl bg-success/10 border border-success/20 p-4 text-left transition hover:bg-success/20 hover:border-success/40">
-                  <div className="font-semibold text-success mb-1">System Diagnostics</div>
-                  <div className="text-sm text-muted">Run comprehensive system check</div>
+                <button 
+                  onClick={() => window.location.href = '/assistant'}
+                  className="w-full rounded-2xl bg-purple-500/10 border border-purple-500/20 p-4 text-left transition hover:bg-purple-500/20 hover:border-purple-500/40"
+                >
+                  <div className="font-semibold text-purple-400 mb-1">🔊 Hindi Voice Assistant</div>
+                  <div className="text-sm text-muted">Smooth Hindi TTS with multi-engine support</div>
+                </button>
+                <button 
+                  onClick={() => window.location.href = '/assistant'}
+                  className="w-full rounded-2xl bg-success/10 border border-success/20 p-4 text-left transition hover:bg-success/20 hover:border-success/40"
+                >
+                  <div className="font-semibold text-success mb-1">⏰ Smart Reminders</div>
+                  <div className="text-sm text-muted">Voice-enabled reminder system with logging</div>
                 </button>
                 <button className="w-full rounded-2xl bg-warning/10 border border-warning/20 p-4 text-left transition hover:bg-warning/20 hover:border-warning/40">
-                  <div className="font-semibold text-warning mb-1">Emergency Stop</div>
-                  <div className="text-sm text-muted">Halt all robot operations</div>
+                  <div className="font-semibold text-warning mb-1">🛑 Emergency Stop</div>
+                  <div className="text-sm text-muted">Halt all robot operations instantly</div>
                 </button>
               </div>
             </div>

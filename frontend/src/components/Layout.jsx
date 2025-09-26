@@ -5,6 +5,7 @@ import { SparklesIcon } from '@heroicons/react/24/solid';
 const navItems = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/control', label: 'Live Control' },
+  { to: '/assistant', label: 'Voice Assistant' },
   { to: '/alerts', label: 'Alerts & Logs' }
 ];
 

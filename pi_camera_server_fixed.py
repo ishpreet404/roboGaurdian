@@ -507,22 +507,68 @@ def _write_temp_audio(data: bytes, filename: Optional[str], content_type: Option
     return temp_path
 
 
+def _convert_to_wav(input_path: str) -> str:
+    """Convert audio file to WAV format for better Pi compatibility"""
+    output_path = input_path.rsplit('.', 1)[0] + '_converted.wav'
+    
+    # Try ffmpeg conversion first
+    try:
+        subprocess.run([
+            'ffmpeg', '-i', input_path, 
+            '-acodec', 'pcm_s16le',  # 16-bit PCM
+            '-ar', '22050',          # 22kHz sample rate (good for speech)
+            '-ac', '1',              # Mono
+            '-y',                    # Overwrite output
+            '-loglevel', 'quiet',
+            output_path
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        logger.debug('🔄 Converted %s to WAV format', input_path)
+        return output_path
+        
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        logger.warning('⚠️ FFmpeg conversion failed, using original file')
+        return input_path
+
+
 def _play_audio_file(file_path: str) -> bool:
+    extension = Path(file_path).suffix.lower()
+    
+    # Convert non-WAV files to WAV for better compatibility
+    if extension not in {'.wav', '.wave'}:
+        converted_path = _convert_to_wav(file_path)
+        if converted_path != file_path:
+            # Use converted file and clean up after
+            try:
+                success = _play_audio_file_direct(converted_path)
+                os.remove(converted_path)  # Clean up converted file
+                return success
+            except Exception as exc:
+                logger.warning('⚠️ Conversion playback failed: %s', exc)
+                # Fall back to original file
+    
+    return _play_audio_file_direct(file_path)
+
+
+def _play_audio_file_direct(file_path: str) -> bool:
+    """Play audio file directly without conversion"""
     commands = []
     extension = Path(file_path).suffix.lower()
+    
+    # For WAV files, prefer aplay (ALSA) for best quality
     if extension in {'.wav', '.wave'}:
         commands.append(['aplay', '-q', file_path])
-
-    commands.extend(
-        [
-            ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
-            ['mpv', '--really-quiet', file_path],
-        ]
-    )
+    
+    # Universal players that handle multiple formats
+    commands.extend([
+        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
+        ['mpv', '--really-quiet', file_path],
+    ])
 
     for command in commands:
         try:
             subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            logger.debug('🔊 Audio played successfully with %s', command[0])
             return True
         except FileNotFoundError:
             continue
