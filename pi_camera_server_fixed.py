@@ -564,44 +564,58 @@ def _play_audio_file(file_path: str) -> bool:
 
 
 def _play_audio_file_direct(file_path: str) -> bool:
-    """Play audio file with Bluetooth speaker compatibility"""
+    """Play audio file with Bluetooth support AND reliable fallbacks"""
     extension = Path(file_path).suffix.lower()
     
-    # Bluetooth-first approach: Prioritize PulseAudio for proper BT routing
+    # Progressive approach: Try Bluetooth-compatible methods first, then reliable fallbacks
     commands = []
     
-    # Method 1: PulseAudio (best for Bluetooth speakers)
+    # Method 1: Try Bluetooth-compatible PulseAudio (if available)
+    if extension in {'.wav', '.wave'}:
+        commands.append(['paplay', file_path])  # PulseAudio for WAV
+    
+    # Method 2: Try media players with Bluetooth support
     commands.extend([
-        # Direct MP3/MP4 playback via PulseAudio (preserves quality)
-        ['paplay', file_path] if extension in {'.wav', '.wave'} else None,
+        # MPV (handles most formats, Bluetooth-aware)
+        ['mpv', '--really-quiet', '--no-video', '--volume=80', file_path],
         
-        # FFmpeg to PulseAudio (handles MP3/MP4 → Bluetooth)
-        ['ffmpeg', '-i', file_path, '-f', 'pulse', '-acodec', 'pcm_s16le',
-         '-ar', '44100', '-ac', '2', '-af', 'volume=0.8', 'default'],
+        # FFplay (reliable, works with Bluetooth)
+        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
     ])
     
-    # Method 2: Direct media players (Bluetooth-aware)
+    # Method 3: FFmpeg conversions (try Bluetooth first, then ALSA)
     commands.extend([
-        # MPV with PulseAudio (best for MP3/MP4)
-        ['mpv', '--audio-driver=pulse', '--volume=80', 
-         '--really-quiet', '--no-video', file_path],
-         
-        # FFplay with PulseAudio
-        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet',
-         '-af', 'volume=0.8', file_path],
+        # Try PulseAudio output (Bluetooth-compatible)
+        ['ffmpeg', '-i', file_path, '-f', 'pulse', '-loglevel', 'error', 'default'],
+        
+        # Fallback to ALSA (your original working method)
+        ['ffmpeg', '-i', file_path, '-f', 'alsa', '-acodec', 'pcm_s16le',
+         '-ar', '22050', '-ac', '1', '-loglevel', 'error', 'default'],
     ])
     
-    # Method 3: ALSA fallback (for non-Bluetooth setups)
+    # Method 4: ALSA direct (original working methods as final fallback)
     if extension in {'.wav', '.wave'}:
         commands.extend([
-            # Standard ALSA (may not route to Bluetooth)
+            # Your original working ALSA commands
             ['aplay', '-q', file_path],
-            # Force specific ALSA device
-            ['aplay', '-D', 'hw:0,0', '-q', file_path],
+            ['aplay', '-D', 'hw:0,0', '-r', '22050', '-f', 'S16_LE', '-c', '1', file_path],
         ])
     
-    # Filter out None commands
-    commands = [cmd for cmd in commands if cmd is not None]
+    # Method 5: Last resort pygame (if everything else fails)
+    commands.append(['python3', '-c', f'''
+import pygame
+import sys
+try:
+    pygame.mixer.init()
+    pygame.mixer.music.load("{file_path}")
+    pygame.mixer.music.play()
+    while pygame.mixer.music.get_busy():
+        pygame.time.wait(100)
+    print("Pygame success")
+except Exception as e:
+    print(f"Pygame failed: {{e}}")
+    sys.exit(1)
+'''])
 
     for i, command in enumerate(commands):
         try:
