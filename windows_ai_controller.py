@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 class WindowsAIController:
     def __init__(self):
         # ⚠️ UPDATE THESE URLs WITH YOUR PI ⚠️
-        self.PI_BASE_URL = "http://10.173.125.26:5000"  # Updated Pi IP from error log
+        self.PI_BASE_URL = "http://192.168.1.12:5000"  # Updated Pi IP from error log
         # OR use tunnel URL:
         # self.PI_BASE_URL = "https://your-tunnel-url.serveo.net"
         
@@ -73,20 +73,20 @@ class WindowsAIController:
         self.current_fps = 0
         self.commands_sent = 0
         self.last_command_time = 0
-        self.command_cooldown = 0.1  # Reduced from 0.3 to 0.1 seconds between commands
+        self.command_cooldown = 0.3  # seconds between commands
         # Gentle turn sequencing state
         self.pending_turn_sequence = None
         self.last_turn_sequence_info = {'stops_sent': 0, 'total_stops': 0}
 
-        # Inference performance tuning for low latency
-        self.inference_size = 224            # Even smaller for faster inference (224 vs 320)
-        self.max_inference_fps = 15         # Increased from 8 to 15 FPS for more responsive tracking
+        # Inference performance tuning
+        self.inference_size = 320            # smaller size for faster inference (try 320 or 416)
+        self.max_inference_fps = 8          # cap inference to this FPS to reduce CPU load
         self.last_inference_time = 0
         self.model_device = 'cpu'           # will be set appropriately when model loads
-        # Detection smoothing (avoid flicker) - reduced for lower latency
-        self.detection_history = collections.deque(maxlen=4)  # Reduced from 8 to 4 for faster response
-        self.detection_keep_seconds = 0.3  # Reduced from 0.6 to 0.3 seconds for faster response
-        self.crying_history = collections.deque(maxlen=4)  # Reduced for faster response
+        # Detection smoothing (avoid flicker)
+        self.detection_history = collections.deque(maxlen=8)  # store recent detection lists as (timestamp, detections)
+        self.detection_keep_seconds = 0.6  # keep recent detections for this many seconds to smooth display
+        self.crying_history = collections.deque(maxlen=8)  # store recent crying booleans for stability
         
         # Connection status
         self.pi_connected = False
@@ -116,11 +116,11 @@ class WindowsAIController:
         self.streaming_thread = None
         self.stream_frame = None
         self.stream_lock = threading.Lock()
-        # Streaming performance tuning for low latency
-        self.stream_fps = 15           # Increased from 12 to 15 FPS for smoother display
-        self.jpeg_quality = 40         # Reduced from 60 to 40 for lower latency
+        # Streaming performance tuning
+        self.stream_fps = 12           # target FPS for MJPEG stream (lower reduces latency & CPU)
+        self.jpeg_quality = 60         # JPEG quality for stream (lower reduces size and latency)
         # Display throttling to avoid PhotoImage overload on main thread
-        self.display_fps = 20          # Increased from 12 to 20 for more responsive display
+        self.display_fps = 12
         self._last_display_time = 0
         
         # Initialize pygame for audio alerts
@@ -787,8 +787,8 @@ class WindowsAIController:
 
         current_time = time.time()
 
-        # Faster cooldown for more responsive tracking
-        gentle_cooldown = 0.2  # Reduced from 500ms to 200ms between auto commands for faster response
+        # Slow cooldown to match search rotation speed and prevent overshooting
+        gentle_cooldown = 0.5  # 500ms between auto commands (same as search rotation speed)
         if current_time - self.last_command_time < gentle_cooldown:
             return
 
@@ -1089,7 +1089,7 @@ class WindowsAIController:
             
             self.log(f"📤 Windows → Pi → ESP32: {command}")
             
-            response = requests.post(url, json=data, timeout=1)
+            response = requests.post(url, json=data, timeout=3)
             
             if response.status_code == 200:
                 self.commands_sent += 1
@@ -1145,7 +1145,7 @@ class WindowsAIController:
                 url = f"{pi_url}/status"
                 self.log(f"📡 Checking status endpoint: {url}")
                 
-                response = requests.get(url, timeout=2)
+                response = requests.get(url, timeout=5)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -1183,7 +1183,7 @@ class WindowsAIController:
                     try:
                         video_url = f"{pi_url}/video_feed"
                         self.log(f"📹 Testing video feed: {video_url}")
-                        video_response = requests.get(video_url, timeout=1, stream=True)
+                        video_response = requests.get(video_url, timeout=3, stream=True)
                         if video_response.status_code == 200:
                             self.log("✅ Video feed accessible")
                         else:
