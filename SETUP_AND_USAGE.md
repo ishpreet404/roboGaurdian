@@ -1,6 +1,15 @@
 # RoboGuardian Deployment & Usage Guide
 
-This guide walks you through preparing the Windows control center, the Raspberry Pi robot server, and the optional frontend so you can stream video, control the robot, exchange assistant messages, and deliver one-way voice notes with reminder scheduling.
+This guide walks you through preparing the W### 4.4 Configure voice output
+- Attach a USB/Bluetooth speaker (or use the Pi's audio jack). The enhanced TTS system supports multiple engines for better speech quality.
+- **Speech Quality Options**:
+  - **Best quality**: gTTS (needs internet) - natural sounding Hindi/English
+  - **Good quality**: pyttsx3 with Festival engine - configurable voices
+  - **Basic quality**: espeak - works offline, fast but robotic
+- **Fix "No speech engine available"**: Run the included `fix_pi_speech.sh` script for full setup.
+- Test Hindi: `echo "नमस्ते रोबोट" | espeak -v hi` and English: `echo "Hello robot" | espeak`.
+- (Optional) To enable the GitHub-based assistant, export the same tokens used on Windows and set `PI_ASSISTANT_MODE=full`.
+- To keep the Pi in **speaker-only mode** (no GitHub API calls), leave the token unset and ensure `PI_ASSISTANT_MODE` is `fallback` (default).ws control center, the Raspberry Pi robot server, and the optional frontend so you can stream video, control the robot, exchange assistant messages, and deliver one-way voice notes with reminder scheduling.
 
 ---
 
@@ -69,7 +78,9 @@ Voice notes flow from the browser → Windows supervisor → Pi `/assistant/voic
 ### 4.2 Install system packages
 ```bash
 sudo apt install -y python3-pip python3-venv python3-opencv python3-flask \
-    python3-serial python3-numpy ffmpeg mpv alsa-utils
+    python3-serial python3-numpy ffmpeg mpv alsa-utils espeak espeak-data \
+    festival festvox-hi-nsk speech-dispatcher
+pip3 install pyttsx3 gTTS pygame
 ```
 
 ### 4.3 Deploy repo files to Pi

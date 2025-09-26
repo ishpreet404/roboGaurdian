@@ -573,17 +573,37 @@ class PiFallbackSpeaker:
         self._queue: 'queue.Queue[Optional[str]]' = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self.ready = False
+        self.use_gtts = False
+        
+        # Try gTTS first for better quality (needs internet)
+        try:
+            import gtts  # type: ignore[import-not-found]
+            self.use_gtts = True
+            logger.info('🌐 gTTS available for high-quality speech')
+        except ImportError:
+            logger.info('📦 gTTS not installed, using pyttsx3 fallback')
 
-        if pyttsx3 is None:
-            logger.warning('🔇 pyttsx3 not installed; Pi fallback speaker disabled.')
+        if pyttsx3 is None and not self.use_gtts:
+            logger.warning('🔇 No TTS engines available; Pi fallback speaker disabled.')
             return
 
         try:
-            self._engine = pyttsx3.init()
+            if pyttsx3 is not None:
+                self._engine = pyttsx3.init()
+                # Configure for better Hindi support if available
+                voices = self._engine.getProperty('voices')
+                for voice in voices:
+                    if 'hindi' in voice.name.lower() or 'hi' in voice.id.lower():
+                        self._engine.setProperty('voice', voice.id)
+                        logger.info(f'🇮🇳 Using Hindi voice: {voice.name}')
+                        break
+                # Set slower rate for clearer speech
+                self._engine.setProperty('rate', 150)
+                
             self.ready = True
             self._thread = threading.Thread(target=self._worker, name='PiSpeakerThread', daemon=True)
             self._thread.start()
-            logger.info('🔊 Fallback speech engine ready.')
+            logger.info('🔊 Enhanced speech engine ready with Hindi support.')
         except Exception as exc:  # pragma: no cover - hardware specific
             logger.error('❌ Failed to initialise fallback speaker: %s', exc)
             self.ready = False
@@ -596,11 +616,65 @@ class PiFallbackSpeaker:
             if not text:
                 continue
             try:
+                # Try gTTS first for better quality
+                if self.use_gtts and self._try_gtts_speech(text):
+                    continue
+                
+                # Fallback to pyttsx3
                 if self._engine is not None:
                     self._engine.say(text)
                     self._engine.runAndWait()
+                else:
+                    # Last resort: use system espeak
+                    self._try_system_speech(text)
             except Exception as exc:  # pragma: no cover - hardware specific
                 logger.error('⚠️ Fallback speaker error: %s', exc)
+
+    def _try_gtts_speech(self, text: str) -> bool:
+        """Try using gTTS for high-quality speech."""
+        try:
+            import gtts  # type: ignore[import-not-found]
+            import pygame  # type: ignore[import-not-found]
+            
+            # Detect language (simple heuristic)
+            lang = 'hi' if any(ord(c) > 127 for c in text) else 'en'
+            
+            # Generate speech
+            tts = gtts.gTTS(text=text, lang=lang, slow=False)
+            
+            # Save to temporary file and play
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
+                tts.save(tmp_file.name)
+                
+                # Play using pygame
+                pygame.mixer.init()
+                pygame.mixer.music.load(tmp_file.name)
+                pygame.mixer.music.play()
+                
+                # Wait for playback to complete
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.1)
+                
+                # Cleanup
+                pygame.mixer.quit()
+                os.unlink(tmp_file.name)
+                
+            return True
+        except Exception as exc:
+            logger.debug('gTTS failed, using fallback: %s', exc)
+            return False
+
+    def _try_system_speech(self, text: str) -> bool:
+        """Last resort: use system espeak."""
+        try:
+            # Try Hindi first if text contains non-ASCII chars
+            if any(ord(c) > 127 for c in text):
+                subprocess.run(['espeak', '-v', 'hi', text], check=True, capture_output=True)
+            else:
+                subprocess.run(['espeak', text], check=True, capture_output=True)
+            return True
+        except Exception:
+            return False
 
     def speak_async(self, text: str) -> bool:
         if not self.ready or not text:
