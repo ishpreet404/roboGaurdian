@@ -97,48 +97,139 @@ class PiCameraServer:
             logger.error("   Make sure UART is enabled: sudo raspi-config → Interface Options → Serial Port")
             self.uart_connected = False
             
-        # Initialize camera
+        # Initialize camera with enhanced detection
         try:
-            # Try different camera indices (Pi Camera or USB)
-            for camera_id in [0, 1, -1]:
-                self.camera = cv2.VideoCapture(camera_id)
-                if self.camera.isOpened():
-                    logger.info(f"📹 Found camera at index {camera_id}")
-                    break
-                else:
-                    self.camera.release()
-                    
-            if not self.camera.isOpened():
-                raise Exception("No camera found - check camera connection")
+            self.camera = None
+            camera_found = False
+            
+            logger.info("🔍 Scanning for cameras...")
+            
+            # Method 1: Try standard camera backends with different indices
+            camera_backends = [
+                (cv2.CAP_V4L2, "V4L2"),        # Linux Video4Linux2 (best for Pi)
+                (cv2.CAP_GSTREAMER, "GStreamer"), # Alternative for Pi Camera
+                (cv2.CAP_ANY, "Auto")          # Fallback to any available backend
+            ]
+            
+            for backend, backend_name in camera_backends:
+                logger.info(f"🎥 Trying {backend_name} backend...")
                 
-            # Set optimized camera properties for 1080p robot streaming
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
-            self.camera.set(cv2.CAP_PROP_FPS, self.fps)
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering for low latency
+                # Try different camera indices
+                for camera_id in [0, 1, 2, "/dev/video0", "/dev/video1"]:
+                    try:
+                        logger.info(f"   Testing camera {camera_id}...")
+                        
+                        if isinstance(camera_id, str):
+                            # Try device path directly
+                            self.camera = cv2.VideoCapture(camera_id, backend)
+                        else:
+                            # Try numeric index
+                            self.camera = cv2.VideoCapture(camera_id, backend)
+                        
+                        if self.camera.isOpened():
+                            logger.info(f"📹 Camera opened at {camera_id} with {backend_name}")
+                            
+                            # Try multiple read attempts (first read often fails)
+                            for attempt in range(5):
+                                ret, test_frame = self.camera.read()
+                                if ret and test_frame is not None:
+                                    actual_h, actual_w = test_frame.shape[:2]
+                                    logger.info(f"✅ Camera test successful! Resolution: {actual_w}x{actual_h}")
+                                    camera_found = True
+                                    break
+                                else:
+                                    logger.info(f"   Read attempt {attempt + 1} failed, retrying...")
+                                    time.sleep(0.2)
+                            
+                            if camera_found:
+                                break
+                        
+                        if self.camera:
+                            self.camera.release()
+                            
+                    except Exception as e:
+                        logger.warning(f"   Camera {camera_id} with {backend_name} failed: {e}")
+                        if self.camera:
+                            self.camera.release()
+                            self.camera = None
+                
+                if camera_found:
+                    break
             
-            # Additional optimizations for 1080p performance
+            if not camera_found or not self.camera or not self.camera.isOpened():
+                # Final attempt with relaxed settings
+                logger.warning("⚠️ Standard camera detection failed, trying fallback...")
+                self.camera = cv2.VideoCapture(0)
+                if self.camera.isOpened():
+                    ret, test_frame = self.camera.read()
+                    if ret:
+                        camera_found = True
+                        logger.info("📹 Fallback camera detection successful")
+            
+            if not camera_found:
+                raise Exception("No working camera found after comprehensive scan")
+                
+            # Configure camera settings (start with conservative settings)
+            logger.info("🔧 Configuring camera settings...")
+            
+            # Set basic properties first
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
+            
+            # Try to set resolution and FPS with fallbacks
             try:
-                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))  # Use MJPEG codec
-                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Enable auto exposure
-                self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)      # Enable auto focus if available
+                # Try full 1080p first
+                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+                self.camera.set(cv2.CAP_PROP_FPS, self.fps)
+                
+                # Test if settings worked
+                actual_width = int(self.camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                actual_fps = int(self.camera.get(cv2.CAP_PROP_FPS))
+                
+                logger.info(f"📐 Actual camera settings: {actual_width}x{actual_height} @ {actual_fps}fps")
+                
+                # If we didn't get what we wanted, try 720p fallback
+                if actual_width < 1280 or actual_height < 720:
+                    logger.warning("⚠️ 1080p not supported, trying 720p...")
+                    self.frame_width = 1280
+                    self.frame_height = 720
+                    self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+                    self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+                
             except Exception as e:
-                logger.warning(f"⚠️ Some advanced camera settings not supported: {e}")
+                logger.warning(f"⚠️ Camera configuration warning: {e}")
             
-            # Test camera
+            # Apply advanced optimizations (best effort)
+            try:
+                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+            except Exception:
+                logger.info("ℹ️ Advanced camera settings not available (normal for some cameras)")
+            
+            # Final camera test
             ret, test_frame = self.camera.read()
-            if ret:
+            if ret and test_frame is not None:
                 self.camera_active = True
-                logger.info(f"✅ Camera ready: {self.frame_width}x{self.frame_height} @ {self.fps}fps")
+                final_h, final_w = test_frame.shape[:2]
+                logger.info(f"✅ Camera ready: {final_w}x{final_h}")
                 
                 # Start camera capture thread
                 threading.Thread(target=self.camera_capture_loop, daemon=True).start()
             else:
-                raise Exception("Camera test failed - check camera permissions")
+                raise Exception("Final camera test failed")
                 
         except Exception as e:
             logger.error(f"❌ Camera initialization failed: {e}")
-            logger.error("   Make sure camera is connected and enabled")
+            logger.error("🔧 Troubleshooting steps:")
+            logger.error("   1. Check physical camera connection")
+            logger.error("   2. Enable camera: sudo raspi-config → Interface Options → Camera")
+            logger.error("   3. Check permissions: sudo usermod -a -G video $USER")
+            logger.error("   4. Reboot Pi: sudo reboot")
+            logger.error("   5. Check camera status: lsusb (for USB) or vcgencmd get_camera (for Pi cam)")
+            logger.error("   6. Test camera: raspistill -o test.jpg (for Pi cam)")
+            if self.camera:
+                self.camera.release()
             self.camera_active = False
             
     def camera_capture_loop(self):

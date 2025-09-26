@@ -83,7 +83,7 @@ class WindowsAIController:
         self.max_inference_fps = 5           # Reduced from 8 to 5 FPS to prevent overload
         self.last_inference_time = 0
         self.model_device = 'cpu'            # will be set appropriately when model loads
-        self.inference_skip_frames = 6       # Skip 6 frames between inferences (every 6th frame)
+        self.inference_skip_frames = 3       # Skip 6 frames between inferences (every 6th frame)
         self.current_skip_count = 0
         self.model_retry_count = 0
         self.max_model_retries = 3
