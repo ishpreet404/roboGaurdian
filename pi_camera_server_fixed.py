@@ -534,13 +534,21 @@ def _convert_to_wav(input_path: str) -> str:
 
 
 def _play_audio_file(file_path: str) -> bool:
-    """Play audio file with aggressive noise reduction for Pi audio chat"""
+    """Play audio file with Bluetooth speaker optimization"""
     extension = Path(file_path).suffix.lower()
     
-    # ALWAYS convert to clean WAV for audio chat to eliminate noise
+    # For Bluetooth speakers: Try original file first (MP3/MP4 often work better)
+    logger.info('🎧 Attempting direct playback for Bluetooth compatibility: %s', extension)
+    
+    # Try direct playback first (better for Bluetooth + MP3)
+    if _play_audio_file_direct(file_path):
+        logger.info('🎵 Direct playback successful (Bluetooth-friendly)')
+        return True
+    
+    # If direct fails, try conversion as fallback
+    logger.warning('🔄 Direct playback failed, trying conversion...')
     converted_path = _convert_to_wav(file_path)
     
-    # If conversion succeeded, use the converted file
     if converted_path != file_path:
         try:
             success = _play_audio_file_direct(converted_path)
@@ -551,57 +559,75 @@ def _play_audio_file(file_path: str) -> bool:
         except Exception as exc:
             logger.warning('⚠️ Conversion playback failed: %s', exc)
     
-    # Fallback to original file only if conversion failed
-    logger.warning('🔄 Using original file as fallback (may have noise)')
-    return _play_audio_file_direct(file_path)
+    logger.error('❌ All audio playback methods failed')
+    return False
 
 
 def _play_audio_file_direct(file_path: str) -> bool:
-    """Play audio file directly with optimized settings for Pi"""
+    """Play audio file with Bluetooth speaker compatibility"""
     extension = Path(file_path).suffix.lower()
     
-    # Build commands with Pi-optimized settings
+    # Bluetooth-first approach: Prioritize PulseAudio for proper BT routing
     commands = []
     
-    # For WAV files, use aplay with specific hardware settings
+    # Method 1: PulseAudio (best for Bluetooth speakers)
+    commands.extend([
+        # Direct MP3/MP4 playback via PulseAudio (preserves quality)
+        ['paplay', file_path] if extension in {'.wav', '.wave'} else None,
+        
+        # FFmpeg to PulseAudio (handles MP3/MP4 → Bluetooth)
+        ['ffmpeg', '-i', file_path, '-f', 'pulse', '-acodec', 'pcm_s16le',
+         '-ar', '44100', '-ac', '2', '-af', 'volume=0.8', 'default'],
+    ])
+    
+    # Method 2: Direct media players (Bluetooth-aware)
+    commands.extend([
+        # MPV with PulseAudio (best for MP3/MP4)
+        ['mpv', '--audio-driver=pulse', '--volume=80', 
+         '--really-quiet', '--no-video', file_path],
+         
+        # FFplay with PulseAudio
+        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet',
+         '-af', 'volume=0.8', file_path],
+    ])
+    
+    # Method 3: ALSA fallback (for non-Bluetooth setups)
     if extension in {'.wav', '.wave'}:
         commands.extend([
-            # Try with specific format settings (most reliable for Pi)
-            ['aplay', '-D', 'hw:0,0', '-r', '22050', '-f', 'S16_LE', '-c', '1', file_path],
-            # Fallback to default device
+            # Standard ALSA (may not route to Bluetooth)
             ['aplay', '-q', file_path],
+            # Force specific ALSA device
+            ['aplay', '-D', 'hw:0,0', '-q', file_path],
         ])
     
-    # Universal players with Pi-optimized settings
-    commands.extend([
-        # FFplay with audio driver specification
-        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'error', 
-         '-af', 'volume=1.2', file_path],  # Slight volume boost
-        # MPV with ALSA driver
-        ['mpv', '--audio-driver=alsa', '--really-quiet', 
-         '--audio-channels=mono', file_path],
-    ])
+    # Filter out None commands
+    commands = [cmd for cmd in commands if cmd is not None]
 
-    for command in commands:
+    for i, command in enumerate(commands):
         try:
+            logger.debug('🎵 Trying audio method %d: %s', i+1, command[0])
             result = subprocess.run(command, check=True, 
                                   stdout=subprocess.DEVNULL, 
                                   stderr=subprocess.PIPE,
                                   text=True, timeout=30)
-            logger.debug('🔊 Audio played successfully with %s', command[0])
+            logger.info('🔊 Audio SUCCESS with method %d (%s)', i+1, command[0])
             return True
         except FileNotFoundError:
             logger.debug('⏸️ Audio player %s not available', command[0])
             continue
         except subprocess.TimeoutExpired:
-            logger.warning('⏰ Audio playback timeout with %s', command[0])
+            logger.warning('⏰ Audio timeout with %s', command[0])
             continue
         except subprocess.CalledProcessError as exc:
-            logger.warning('⚠️ Audio command failed (%s): %s', command[0], 
-                         exc.stderr[:100] if exc.stderr else 'unknown error')
+            stderr_msg = exc.stderr[:100] if exc.stderr else 'no error details'
+            logger.warning('⚠️ Audio method %d failed (%s): %s', i+1, command[0], stderr_msg)
             continue
 
-    logger.error('❌ No compatible audio player found for %s', file_path)
+    # If we get here, all methods failed
+    logger.error('❌ ALL audio methods failed for %s - Pi audio hardware issue?', file_path)
+    
+    # Nuclear fallback: Suggest hardware solution
+    logger.error('💡 Consider using USB audio adapter to bypass Pi audio hardware')
     return False
 
 
