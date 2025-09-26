@@ -8,6 +8,7 @@ This guide walks you through preparing the W### 4.4 Configure voice output
   - **Basic quality**: espeak - works offline, fast but robotic
 - **Fix "No speech engine available"**: Run the included `fix_pi_speech.sh` script for full setup.
 - Test Hindi: `echo "नमस्ते रोबोट" | espeak -v hi` and English: `echo "Hello robot" | espeak`.
+- **One-Way Audio Chat**: Use `audio_chat_test.html` to send live audio from your laptop microphone directly to the Pi speaker.
 - (Optional) To enable the GitHub-based assistant, export the same tokens used on Windows and set `PI_ASSISTANT_MODE=full`.
 - To keep the Pi in **speaker-only mode** (no GitHub API calls), leave the token unset and ensure `PI_ASSISTANT_MODE` is `fallback` (default).ws control center, the Raspberry Pi robot server, and the optional frontend so you can stream video, control the robot, exchange assistant messages, and deliver one-way voice notes with reminder scheduling.
 
@@ -20,6 +21,11 @@ This guide walks you through preparing the W### 4.4 Configure voice output
 - **Frontend app (optional)** talks to the Windows supervisor APIs to control the system and upload voice notes.
 
 Voice notes flow from the browser → Windows supervisor → Pi `/assistant/voice_note` endpoint → local playback queue (or text-to-speech reminder).
+
+### New Features:
+- **Enhanced TTS**: Multi-engine speech system with smooth Hindi/English support via gTTS
+- **Fixed Reminders**: Local reminder scheduling with proper error logging and delivery
+- **One-Way Audio Chat**: Live microphone → Pi speaker streaming for real-time communication
 
 ---
 

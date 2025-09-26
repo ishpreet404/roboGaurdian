@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>🎤 Robot Audio Chat Test</title>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				max-width: 800px;
+				margin: 50px auto;
+				padding: 20px;
+				background: #f5f5f5;
+			}
+			.container {
+				background: white;
+				padding: 30px;
+				border-radius: 10px;
+				box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+			}
+			h1 {
+				text-align: center;
+				color: #333;
+			}
+			.control-group {
+				margin: 20px 0;
+				padding: 20px;
+				border: 1px solid #ddd;
+				border-radius: 8px;
+			}
+			.control-group h3 {
+				margin-top: 0;
+				color: #555;
+			}
+			button {
+				background: #4caf50;
+				color: white;
+				border: none;
+				padding: 12px 20px;
+				border-radius: 5px;
+				cursor: pointer;
+				font-size: 16px;
+				margin: 5px;
+			}
+			button:hover {
+				background: #45a049;
+			}
+			button:disabled {
+				background: #ccc;
+				cursor: not-allowed;
+			}
+			.record-btn.recording {
+				background: #f44336;
+				animation: pulse 1s infinite;
+			}
+			@keyframes pulse {
+				0% {
+					opacity: 1;
+				}
+				50% {
+					opacity: 0.7;
+				}
+				100% {
+					opacity: 1;
+				}
+			}
+			.status {
+				padding: 10px;
+				margin: 10px 0;
+				border-radius: 5px;
+				font-weight: bold;
+			}
+			.success {
+				background: #d4edda;
+				color: #155724;
+			}
+			.error {
+				background: #f8d7da;
+				color: #721c24;
+			}
+			.info {
+				background: #d1ecf1;
+				color: #0c5460;
+			}
+			input[type="text"] {
+				width: 100%;
+				padding: 10px;
+				border: 1px solid #ddd;
+				border-radius: 5px;
+				margin: 5px 0;
+				font-size: 14px;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<h1>🎤 Robot Audio Chat Test</h1>
+
+			<div class="control-group">
+				<h3>🎙️ One-Way Audio Chat (Laptop Mic → Pi Speaker)</h3>
+				<button id="recordBtn" class="record-btn">🎤 Start Recording</button>
+				<button id="playBtn" disabled>▶️ Play Recording</button>
+				<button id="sendBtn" disabled>📡 Send to Pi Speaker</button>
+				<div id="recordingStatus"></div>
+			</div>
+
+			<div class="control-group">
+				<h3>💬 Text-to-Speech Test</h3>
+				<input
+					type="text"
+					id="textInput"
+					placeholder="Enter text to speak through Pi..."
+					value="नमस्ते, मैं लैपटॉप से बोल रहा हूं"
+				/>
+				<br />
+				<button onclick="sendText()">🔊 Speak on Pi</button>
+			</div>
+
+			<div class="control-group">
+				<h3>⏰ Reminder Test</h3>
+				<input
+					type="text"
+					id="reminderText"
+					placeholder="Reminder message..."
+					value="टेस्ट रिमाइंडर"
+				/>
+				<input
+					type="number"
+					id="reminderDelay"
+					placeholder="Delay in seconds"
+					value="10"
+				/>
+				<br />
+				<button onclick="addReminder()">⏰ Add Reminder</button>
+				<button onclick="listReminders()">📋 List Reminders</button>
+			</div>
+
+			<div id="status"></div>
+		</div>
+
+		<script>
+			let mediaRecorder;
+			let recordedChunks = [];
+			let recordedBlob;
+
+			const recordBtn = document.getElementById("recordBtn");
+			const playBtn = document.getElementById("playBtn");
+			const sendBtn = document.getElementById("sendBtn");
+			const status = document.getElementById("status");
+			const recordingStatus = document.getElementById("recordingStatus");
+
+			// Initialize audio recording
+			recordBtn.addEventListener("click", toggleRecording);
+			playBtn.addEventListener("click", playRecording);
+			sendBtn.addEventListener("click", sendAudioToPi);
+
+			async function toggleRecording() {
+				if (!mediaRecorder || mediaRecorder.state === "inactive") {
+					startRecording();
+				} else {
+					stopRecording();
+				}
+			}
+
+			async function startRecording() {
+				try {
+					const stream = await navigator.mediaDevices.getUserMedia({
+						audio: {
+							echoCancellation: true,
+							noiseSuppression: true,
+							autoGainControl: true,
+						},
+					});
+
+					recordedChunks = [];
+					mediaRecorder = new MediaRecorder(stream);
+
+					mediaRecorder.ondataavailable = (e) => {
+						if (e.data.size > 0) recordedChunks.push(e.data);
+					};
+
+					mediaRecorder.onstop = () => {
+						recordedBlob = new Blob(recordedChunks, { type: "audio/wav" });
+						playBtn.disabled = false;
+						sendBtn.disabled = false;
+						recordingStatus.innerHTML =
+							'<div class="info">✅ Recording complete! You can now play or send to Pi.</div>';
+					};
+
+					mediaRecorder.start();
+					recordBtn.textContent = "⏹️ Stop Recording";
+					recordBtn.classList.add("recording");
+					recordingStatus.innerHTML =
+						'<div class="info">🔴 Recording... Click stop when done.</div>';
+					playBtn.disabled = true;
+					sendBtn.disabled = true;
+				} catch (err) {
+					showStatus("❌ Error accessing microphone: " + err.message, "error");
+				}
+			}
+
+			function stopRecording() {
+				if (mediaRecorder && mediaRecorder.state === "recording") {
+					mediaRecorder.stop();
+					mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+					recordBtn.textContent = "🎤 Start Recording";
+					recordBtn.classList.remove("recording");
+				}
+			}
+
+			function playRecording() {
+				if (recordedBlob) {
+					const audio = new Audio(URL.createObjectURL(recordedBlob));
+					audio.play();
+					showStatus("▶️ Playing recorded audio locally...", "info");
+				}
+			}
+
+			async function sendAudioToPi() {
+				if (!recordedBlob) {
+					showStatus("❌ No recording to send", "error");
+					return;
+				}
+
+				const formData = new FormData();
+				formData.append("file", recordedBlob, "mic_audio.wav");
+
+				try {
+					showStatus("📡 Sending audio to Pi speaker...", "info");
+
+					const response = await fetch(
+						"http://localhost:5050/api/assistant/audio-chat",
+						{
+							method: "POST",
+							body: formData,
+						}
+					);
+
+					const result = await response.json();
+
+					if (response.ok) {
+						showStatus(
+							`✅ Audio sent successfully! Playing through Pi speaker. (${result.file_size} bytes)`,
+							"success"
+						);
+					} else {
+						showStatus("❌ Failed to send audio: " + result.message, "error");
+					}
+				} catch (err) {
+					showStatus("❌ Network error: " + err.message, "error");
+				}
+			}
+
+			async function sendText() {
+				const text = document.getElementById("textInput").value.trim();
+				if (!text) {
+					showStatus("❌ Please enter text to speak", "error");
+					return;
+				}
+
+				try {
+					showStatus("📡 Sending text to Pi speaker...", "info");
+
+					const response = await fetch(
+						"http://localhost:5050/api/assistant/message",
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ text: text, speak: true }),
+						}
+					);
+
+					const result = await response.json();
+
+					if (response.ok) {
+						showStatus(
+							"✅ Text sent successfully! Speaking through Pi.",
+							"success"
+						);
+					} else {
+						showStatus("❌ Failed to send text: " + result.message, "error");
+					}
+				} catch (err) {
+					showStatus("❌ Network error: " + err.message, "error");
+				}
+			}
+
+			async function addReminder() {
+				const text = document.getElementById("reminderText").value.trim();
+				const delay =
+					parseInt(document.getElementById("reminderDelay").value) || 10;
+
+				if (!text) {
+					showStatus("❌ Please enter reminder text", "error");
+					return;
+				}
+
+				try {
+					showStatus(
+						`⏰ Adding reminder for ${delay} seconds from now...`,
+						"info"
+					);
+
+					const response = await fetch(
+						"http://localhost:5050/api/assistant/reminders",
+						{
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								message: text,
+								delay_seconds: delay,
+							}),
+						}
+					);
+
+					const result = await response.json();
+
+					if (response.ok) {
+						showStatus(
+							`✅ Reminder added! Will trigger in ${delay} seconds.`,
+							"success"
+						);
+					} else {
+						showStatus("❌ Failed to add reminder: " + result.message, "error");
+					}
+				} catch (err) {
+					showStatus("❌ Network error: " + err.message, "error");
+				}
+			}
+
+			async function listReminders() {
+				try {
+					const response = await fetch(
+						"http://localhost:5050/api/assistant/reminders"
+					);
+					const result = await response.json();
+
+					if (response.ok && result.reminders) {
+						const count = result.reminders.length;
+						showStatus(
+							`📋 Found ${count} active reminders. Check console for details.`,
+							"info"
+						);
+						console.log("Active reminders:", result.reminders);
+					} else {
+						showStatus(
+							"❌ Failed to get reminders: " +
+								(result.message || "Unknown error"),
+							"error"
+						);
+					}
+				} catch (err) {
+					showStatus("❌ Network error: " + err.message, "error");
+				}
+			}
+
+			function showStatus(message, type) {
+				status.innerHTML = `<div class="${type}">${message}</div>`;
+				setTimeout(() => (status.innerHTML = ""), 5000);
+			}
+
+			// Auto-check status on load
+			window.addEventListener("load", async () => {
+				try {
+					const response = await fetch("http://localhost:5050/api/status");
+					const result = await response.json();
+
+					if (response.ok) {
+						showStatus(
+							`🤖 Connected to robot supervisor. Pi: ${
+								result.pi_connected ? "✅" : "❌"
+							}`,
+							"success"
+						);
+					} else {
+						showStatus(
+							"⚠️ Robot supervisor not running. Start windows_robot_supervisor.py first.",
+							"error"
+						);
+					}
+				} catch (err) {
+					showStatus(
+						"⚠️ Cannot connect to robot supervisor. Start windows_robot_supervisor.py first.",
+						"error"
+					);
+				}
+			});
+		</script>
+	</body>
+</html>

@@ -501,6 +501,35 @@ class WindowsRobotSupervisor:
 
             return jsonify({"status": "success", "reminder": removed})
 
+        @app.route("/api/assistant/audio-chat", methods=["POST", "OPTIONS"])
+        def assistant_audio_chat() -> Any:
+            """One-way audio chat: send audio from laptop mic to Pi speaker"""
+            if request.method == "OPTIONS":
+                return ("", 204)
+
+            if not request.files:
+                return jsonify({"status": "error", "message": "Audio file is required"}), 400
+
+            file = next(iter(request.files.values()))
+            data = file.read()
+            if not data:
+                return jsonify({"status": "error", "message": "Audio file is empty"}), 400
+
+            files = {
+                "file": (
+                    file.filename or "mic_audio.wav",
+                    data,
+                    file.mimetype or "audio/wav",
+                )
+            }
+
+            return _proxy_pi_request(
+                "POST",
+                "/assistant/audio_chat",
+                files_payload=files,
+                timeout=15.0,
+            )
+
         @app.route("/api/command", methods=["POST", "OPTIONS"])
         def send_command() -> Any:
             if request.method == "OPTIONS":

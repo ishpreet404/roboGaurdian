@@ -917,10 +917,15 @@ class LocalReminderScheduler:
 
             announcement = delivered.voice_note or delivered.message
             try:
+                logger.info(f'🔔 Triggering reminder: {delivered.message}')
                 if announcement:
-                    self._voice_manager.enqueue_text(announcement, 0.0)
+                    result = self._voice_manager.enqueue_text(announcement, 0.0)
+                    logger.info(f'📢 Reminder speech result: {result}')
                 else:
-                    self._speak_callback('Reminder due.', True)
+                    success = self._speak_callback('Reminder due.', True)
+                    logger.info(f'📢 Default reminder speech success: {success}')
+            except Exception as exc:
+                logger.error(f'❌ Reminder delivery failed: {exc}')
             finally:
                 self._event.set()
 
@@ -1226,6 +1231,45 @@ def assistant_speak():
         return jsonify({'status': 'error', 'message': 'No speech engine available on Pi'}), 503
 
     return jsonify({'status': 'success', 'spoken_text': text, 'async': async_mode})
+
+
+@app.route('/assistant/audio_chat', methods=['POST', 'OPTIONS'])
+def assistant_audio_chat():
+    """One-way audio chat: receive audio from laptop mic and play through Pi speaker"""
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    if not request.files:
+        return jsonify({'status': 'error', 'message': 'Audio file is required'}), 400
+
+    file_storage = next(iter(request.files.values()))
+    audio_data = file_storage.read()
+    
+    if not audio_data:
+        return jsonify({'status': 'error', 'message': 'Audio file is empty'}), 400
+
+    try:
+        # Create temporary file for the audio
+        file_path = _write_temp_audio(
+            audio_data, 
+            file_storage.filename or 'chat_audio.wav',
+            file_storage.mimetype
+        )
+        
+        # Play immediately through Pi speaker
+        audio_queue.enqueue(file_path)
+        
+        logger.info('🎤 One-way audio chat: playing received audio through Pi speaker')
+        
+        return jsonify({
+            'status': 'success', 
+            'message': 'Audio playing through Pi speaker',
+            'file_size': len(audio_data)
+        })
+        
+    except Exception as exc:
+        logger.error(f'❌ Audio chat failed: {exc}')
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
 # Flask routes
