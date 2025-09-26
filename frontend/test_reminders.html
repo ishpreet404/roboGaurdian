@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Reminder Test</title>
+		<style>
+			body {
+				font-family: Arial;
+				margin: 20px;
+				background: #1a1b2f;
+				color: white;
+			}
+			.container {
+				max-width: 600px;
+				margin: 0 auto;
+			}
+			.form-group {
+				margin: 15px 0;
+			}
+			label {
+				display: block;
+				margin-bottom: 5px;
+				color: #ccc;
+			}
+			input,
+			textarea,
+			select,
+			button {
+				width: 100%;
+				padding: 10px;
+				border: 1px solid #444;
+				background: #333;
+				color: white;
+				border-radius: 5px;
+			}
+			button {
+				background: #4caf50;
+				cursor: pointer;
+				margin-top: 10px;
+				border: none;
+				font-weight: bold;
+			}
+			button:hover {
+				background: #45a049;
+			}
+			.reminder-list {
+				background: #2a2b3f;
+				padding: 15px;
+				border-radius: 8px;
+				margin-top: 20px;
+			}
+			.reminder-item {
+				background: #333;
+				padding: 10px;
+				margin: 10px 0;
+				border-radius: 5px;
+				border-left: 3px solid #4caf50;
+			}
+			.error {
+				color: #ff6b6b;
+				background: #2a1a1a;
+				padding: 10px;
+				border-radius: 5px;
+			}
+			.success {
+				color: #51cf66;
+				background: #1a2a1a;
+				padding: 10px;
+				border-radius: 5px;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<h1>🔔 Reminder System Test</h1>
+			<p>Direct test of the reminder API functionality</p>
+
+			<div class="form-group">
+				<label>Reminder Message:</label>
+				<textarea
+					id="message"
+					placeholder="Enter reminder message"
+					rows="3"
+				></textarea>
+			</div>
+
+			<div class="form-group">
+				<label>Delay (minutes):</label>
+				<select id="delay">
+					<option value="0.1">6 seconds (test)</option>
+					<option value="1">1 minute</option>
+					<option value="5" selected>5 minutes</option>
+					<option value="10">10 minutes</option>
+					<option value="30">30 minutes</option>
+				</select>
+			</div>
+
+			<div class="form-group">
+				<label>Voice Note (optional):</label>
+				<input type="text" id="voiceNote" placeholder="Text to be spoken" />
+			</div>
+
+			<button onclick="createReminder()">Create Reminder</button>
+			<button onclick="loadReminders()" style="background: #2196f3">
+				Refresh List
+			</button>
+
+			<div id="status"></div>
+
+			<div class="reminder-list">
+				<h3>📋 Active Reminders</h3>
+				<div id="reminders">Loading...</div>
+			</div>
+		</div>
+
+		<script>
+			const API_BASE = "http://localhost:5050/api/assistant";
+
+			function showStatus(message, isError = false) {
+				const status = document.getElementById("status");
+				status.innerHTML = `<div class="${
+					isError ? "error" : "success"
+				}">${message}</div>`;
+				setTimeout(() => (status.innerHTML = ""), 5000);
+			}
+
+			async function createReminder() {
+				const message = document.getElementById("message").value.trim();
+				const delay = parseFloat(document.getElementById("delay").value);
+				const voiceNote = document.getElementById("voiceNote").value.trim();
+
+				if (!message) {
+					showStatus("Please enter a reminder message", true);
+					return;
+				}
+
+				const payload = {
+					message: message,
+					delay_seconds: delay * 60,
+				};
+
+				if (voiceNote) {
+					payload.voice_note = voiceNote;
+				}
+
+				try {
+					console.log("Creating reminder:", payload);
+
+					const response = await fetch(`${API_BASE}/reminders`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(payload),
+					});
+
+					const data = await response.json();
+					console.log("Response:", data);
+
+					if (response.ok) {
+						showStatus(`✅ Reminder created! Will trigger in ${delay} minutes`);
+						document.getElementById("message").value = "";
+						document.getElementById("voiceNote").value = "";
+						loadReminders(); // Refresh the list
+					} else {
+						showStatus(`❌ Failed: ${data.message || "Unknown error"}`, true);
+					}
+				} catch (error) {
+					console.error("Error:", error);
+					showStatus(`❌ Network error: ${error.message}`, true);
+				}
+			}
+
+			async function loadReminders() {
+				try {
+					const response = await fetch(`${API_BASE}/reminders`);
+					const data = await response.json();
+
+					if (response.ok && data.reminders) {
+						displayReminders(data.reminders);
+					} else {
+						document.getElementById(
+							"reminders"
+						).innerHTML = `<div class="error">Failed to load reminders: ${
+							data.message || "Unknown error"
+						}</div>`;
+					}
+				} catch (error) {
+					console.error("Error loading reminders:", error);
+					document.getElementById(
+						"reminders"
+					).innerHTML = `<div class="error">Network error: ${error.message}</div>`;
+				}
+			}
+
+			function displayReminders(reminders) {
+				const container = document.getElementById("reminders");
+
+				if (reminders.length === 0) {
+					container.innerHTML =
+						'<p style="color: #888;">No active reminders</p>';
+					return;
+				}
+
+				const html = reminders
+					.map((reminder) => {
+						const dueTime = new Date(reminder.remind_at).toLocaleString();
+						const status = reminder.delivered ? "✅ Delivered" : "⏳ Pending";
+
+						return `
+                    <div class="reminder-item">
+                        <strong>${reminder.message}</strong><br>
+                        <small>Due: ${dueTime} | ${status}</small>
+                        ${
+													reminder.voice_note
+														? `<br><small>🔊 Voice: ${reminder.voice_note}</small>`
+														: ""
+												}
+                        <button onclick="deleteReminder('${reminder.id}')" 
+                                style="width: auto; padding: 5px 10px; background: #f44336; margin-top: 5px;">
+                            Delete
+                        </button>
+                    </div>
+                `;
+					})
+					.join("");
+
+				container.innerHTML = html;
+			}
+
+			async function deleteReminder(id) {
+				if (!confirm("Delete this reminder?")) return;
+
+				try {
+					const response = await fetch(`${API_BASE}/reminders/${id}`, {
+						method: "DELETE",
+					});
+
+					if (response.ok) {
+						showStatus("✅ Reminder deleted");
+						loadReminders();
+					} else {
+						const data = await response.json();
+						showStatus(`❌ Delete failed: ${data.message}`, true);
+					}
+				} catch (error) {
+					showStatus(`❌ Delete error: ${error.message}`, true);
+				}
+			}
+
+			// Load reminders on page load
+			loadReminders();
+		</script>
+	</body>
+</html>

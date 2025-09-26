@@ -640,7 +640,20 @@ class PiFallbackSpeaker:
         except ImportError:
             logger.info('📦 gTTS not installed, using pyttsx3 fallback')
 
-        if pyttsx3 is None and not self.use_gtts:
+        # Check for espeak as additional fallback
+        self.use_espeak = False
+        try:
+            result = subprocess.run(['espeak', '--version'], check=True, capture_output=True)
+            self.use_espeak = True
+            logger.info('🔊 espeak available as TTS fallback')
+        except FileNotFoundError:
+            logger.debug('espeak command not found')
+        except subprocess.CalledProcessError as e:
+            logger.debug(f'espeak version check failed: {e}')
+        except Exception as e:
+            logger.debug(f'espeak detection error: {e}')
+        
+        if pyttsx3 is None and not self.use_gtts and not self.use_espeak:
             logger.warning('🔇 No TTS engines available; Pi fallback speaker disabled.')
             return
 
@@ -675,15 +688,24 @@ class PiFallbackSpeaker:
             try:
                 # Try gTTS first for better quality
                 if self.use_gtts and self._try_gtts_speech(text):
+                    logger.info('🌐 Used gTTS for speech')
                     continue
                 
                 # Fallback to pyttsx3
                 if self._engine is not None:
+                    logger.info('📦 Using pyttsx3 for speech')
                     self._engine.say(text)
                     self._engine.runAndWait()
+                elif self.use_espeak:
+                    # Use espeak as system fallback
+                    logger.info('🔊 Using espeak for speech')
+                    if not self._try_system_speech(text):
+                        logger.warning('🔇 espeak failed for text playback.')
+                    else:
+                        logger.info('✅ espeak speech successful')
                 else:
-                    # Last resort: use system espeak
-                    self._try_system_speech(text)
+                    logger.warning('🔇 No speech engine available for text playback.')
+                    logger.debug(f'TTS status: gTTS={self.use_gtts}, pyttsx3={self._engine is not None}, espeak={self.use_espeak}')
             except Exception as exc:  # pragma: no cover - hardware specific
                 logger.error('⚠️ Fallback speaker error: %s', exc)
 
@@ -1079,11 +1101,14 @@ else:
     )
     logger.warning('ℹ️ Voice assistant module unavailable; skipping assistant features.')
 
+# Always initialize fallback speaker for TTS functionality
+fallback_speaker = PiFallbackSpeaker()
+
 if assistant_service is None:
-    fallback_speaker = PiFallbackSpeaker()
     reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text(text, async_mode))
 else:
-    fallback_speaker = None
+    # Assistant service available, but still use fallback speaker for TTS
+    reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text(text, async_mode))
 
 @app.route('/assistant/status', methods=['GET'])
 def assistant_status():

@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useRobot } from '../context/RobotContext.jsx';
 import AssistantConsole from '../components/AssistantConsole.jsx';
 import AssistantReminders from '../components/AssistantReminders.jsx';
-import AudioChat from '../components/AudioChat.jsx';
 
 const AssistantPage = () => {
   const { windowsBaseUrl } = useRobot();
@@ -32,11 +31,16 @@ const AssistantPage = () => {
 
   const loadReminders = async () => {
     setLoading(true);
+    console.log('Loading reminders from:', `${windowsBaseUrl}/api/assistant/reminders`);
     try {
       const response = await fetch(`${windowsBaseUrl}/api/assistant/reminders`);
       const data = await response.json();
+      console.log('Reminders response:', { status: response.status, data });
       if (response.ok && data.reminders) {
         setReminders(data.reminders);
+        console.log('Reminders loaded:', data.reminders.length);
+      } else {
+        console.error('Reminders API error:', data);
       }
     } catch (err) {
       console.error('Failed to load reminders:', err);
@@ -87,6 +91,7 @@ const AssistantPage = () => {
   };
 
   const createReminder = async (reminderData) => {
+    console.log('Creating reminder:', reminderData);
     try {
       const payload = {
         message: reminderData.message,
@@ -97,6 +102,9 @@ const AssistantPage = () => {
         ...(reminderData.voiceNote && { voice_note: reminderData.voiceNote }),
       };
 
+      console.log('Reminder payload:', payload);
+      console.log('Sending to:', `${windowsBaseUrl}/api/assistant/reminders`);
+
       const response = await fetch(`${windowsBaseUrl}/api/assistant/reminders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -104,14 +112,17 @@ const AssistantPage = () => {
       });
 
       const data = await response.json();
+      console.log('Create reminder response:', { status: response.status, data });
       
       if (response.ok) {
         await loadReminders(); // Reload reminders
         return data;
       } else {
+        console.error('Create reminder error:', data);
         throw new Error(data.message || 'Failed to create reminder');
       }
     } catch (err) {
+      console.error('Create reminder exception:', err);
       throw new Error(err.message || 'Network error creating reminder');
     }
   };
@@ -140,19 +151,18 @@ const AssistantPage = () => {
         {/* Header Section */}
         <div className="text-center">
           <h1 className="font-display text-4xl font-bold text-foreground mb-4">
-            🤖 Voice Assistant & Communication Center
+            🤖 Voice Assistant & Reminder Center
           </h1>
           <p className="text-lg text-muted max-w-2xl mx-auto">
-            Communicate with your robot using Hindi voice commands, schedule smart reminders, 
-            and send real-time audio messages through the Pi speaker.
+            Send Hindi voice commands and schedule smart reminders 
+            that play automatically through the Pi speaker.
           </p>
         </div>
 
         {/* Main Features Grid */}
         <section className="grid gap-8 xl:grid-cols-[1fr,1fr]">
-          {/* Left Column - Audio Chat and Voice Assistant */}
+          {/* Left Column - Voice Assistant */}
           <div className="space-y-8">
-            <AudioChat />
             <AssistantConsole
               messages={messages}
               onSend={sendMessage}
@@ -175,10 +185,6 @@ const AssistantPage = () => {
             <div className="rounded-3xl border border-white/5 bg-[#0d1023]/80 p-8 shadow-card backdrop-blur-lg">
               <h3 className="font-display text-2xl text-foreground mb-6">🎯 Assistant Features</h3>
               <div className="space-y-4 text-sm">
-                <div className="rounded-2xl border border-accent/20 bg-accent/10 p-4">
-                  <div className="font-semibold text-accent mb-2">🎤 Real-time Audio Chat</div>
-                  <p className="text-accent/80">Record voice messages from your laptop and send them directly to the Pi speaker for instant communication.</p>
-                </div>
                 <div className="rounded-2xl border border-success/20 bg-success/10 p-4">
                   <div className="font-semibold text-success mb-2">🔊 Multi-Engine Hindi TTS</div>
                   <p className="text-success/80">Enhanced text-to-speech with gTTS for quality, pyttsx3 for offline use, and espeak as fallback.</p>
