@@ -799,6 +799,20 @@ def _assistant_offline_payload(message: str) -> Dict[str, Any]:
     return payload
 
 
+def speak_text_direct(text: str) -> bool:
+    """Speak text directly through TTS without AI agent processing."""
+    cleaned = (text or '').strip()
+    if not cleaned:
+        return False
+
+    if fallback_speaker is not None and fallback_speaker.ready:
+        logger.info(f'🔊 Speaking reminder directly: "{cleaned[:50]}{"..." if len(cleaned) > 50 else ""}"')
+        return fallback_speaker.speak_async(cleaned)
+
+    logger.warning('🔇 No TTS engine available for direct speech.')
+    return False
+
+
 def speak_text(text: str, async_mode: bool = True) -> bool:
     cleaned = (text or '').strip()
     if not cleaned:
@@ -814,7 +828,7 @@ def speak_text(text: str, async_mode: bool = True) -> bool:
     if fallback_speaker is not None and fallback_speaker.ready:
         return fallback_speaker.speak_async(cleaned)
 
-    logger.warning('🔇 No speech engine available for text playback.')
+    logger.warning('🔇 No speech engine available for text playbook.')
     return False
 
 
@@ -1105,10 +1119,10 @@ else:
 fallback_speaker = PiFallbackSpeaker()
 
 if assistant_service is None:
-    reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text(text, async_mode))
+    reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text_direct(text))
 else:
-    # Assistant service available, but still use fallback speaker for TTS
-    reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text(text, async_mode))
+    # Assistant service available, but still use direct TTS for reminders
+    reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text_direct(text))
 
 @app.route('/assistant/status', methods=['GET'])
 def assistant_status():

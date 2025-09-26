@@ -181,6 +181,22 @@ const AssistantPage = () => {
               loading={loading}
             />
 
+            {/* Voice Companion */}
+            <div className="rounded-3xl border border-white/5 bg-[#0d1023]/70 p-8 shadow-card backdrop-blur-lg">
+              <div className="mb-6 flex items-center gap-4">
+                <div className="gradient-ring flex h-12 w-12 items-center justify-center rounded-2xl bg-accent/10 text-accent border border-accent/20">
+                  🤖
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.35em] text-muted">Assistant presence</p>
+                  <h3 className="font-display text-2xl text-foreground">Voice Companion "Chirpy"</h3>
+                </div>
+              </div>
+              <p className="text-sm text-muted">
+                The Raspberry Pi voice assistant "Chirpy" now accepts dashboard commands, schedules Hindi voice note reminders, and replays them automatically on the Pi speaker. Keep the device powered for timely alerts.
+              </p>
+            </div>
+
             {/* Feature Overview */}
             <div className="rounded-3xl border border-white/5 bg-[#0d1023]/80 p-8 shadow-card backdrop-blur-lg">
               <h3 className="font-display text-2xl text-foreground mb-6">🎯 Assistant Features</h3>

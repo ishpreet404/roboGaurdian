@@ -116,13 +116,14 @@ const AssistantReminders = ({ reminders, onCreate, onDelete, loading }) => {
             />
           </div>
           <div>
-            <label className="text-xs uppercase tracking-[0.25em] text-muted">Quick delay (minutes)</label>
+            <label className="text-xs uppercase tracking-[0.25em] text-muted">Quick delay</label>
             <select
               disabled={Boolean(datetime)}
               className="mt-2 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-foreground outline-none transition focus:border-accent focus:bg-white/10 disabled:opacity-60"
               value={quickDelay}
               onChange={(event) => setQuickDelay(event.target.value)}
             >
+              <option value="0.083">5 seconds</option>
               {[5, 10, 15, 30, 60].map((option) => (
                 <option key={option} value={option}>
                   {option} minutes
