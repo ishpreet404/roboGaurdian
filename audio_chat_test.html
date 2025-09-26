@@ -183,33 +183,38 @@
 							noiseSuppression: true,
 							autoGainControl: true,
 							sampleRate: 16000, // Lower sample rate for Pi compatibility
-							channelCount: 1,   // Mono audio
+							channelCount: 1, // Mono audio
 						},
 					});
 
 					recordedChunks = [];
-					
+
 					// Choose the best format for Pi compatibility
 					let options = {};
-					if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+					if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
 						options = {
-							mimeType: 'audio/webm;codecs=opus',
-							audioBitsPerSecond: 48000  // Good quality for speech
+							mimeType: "audio/webm;codecs=opus",
+							audioBitsPerSecond: 48000, // Good quality for speech
 						};
-					} else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+					} else if (MediaRecorder.isTypeSupported("audio/mp4")) {
 						options = {
-							mimeType: 'audio/mp4',
-							audioBitsPerSecond: 64000
+							mimeType: "audio/mp4",
+							audioBitsPerSecond: 64000,
 						};
-					} else if (MediaRecorder.isTypeSupported('audio/webm')) {
+					} else if (MediaRecorder.isTypeSupported("audio/webm")) {
 						options = {
-							mimeType: 'audio/webm',
-							audioBitsPerSecond: 48000
+							mimeType: "audio/webm",
+							audioBitsPerSecond: 48000,
 						};
 					}
-					
+
 					mediaRecorder = new MediaRecorder(stream, options);
-					console.log('🎤 Recording with format:', mediaRecorder.mimeType, 'bitrate:', options.audioBitsPerSecond);
+					console.log(
+						"🎤 Recording with format:",
+						mediaRecorder.mimeType,
+						"bitrate:",
+						options.audioBitsPerSecond
+					);
 
 					mediaRecorder.ondataavailable = (e) => {
 						if (e.data.size > 0) recordedChunks.push(e.data);
@@ -217,13 +222,14 @@
 
 					mediaRecorder.onstop = () => {
 						// Use the actual recorded format, not fake WAV
-						const actualMimeType = mediaRecorder.mimeType || 'audio/webm';
+						const actualMimeType = mediaRecorder.mimeType || "audio/webm";
 						recordedBlob = new Blob(recordedChunks, { type: actualMimeType });
-						
+
 						playBtn.disabled = false;
 						sendBtn.disabled = false;
-						recordingStatus.innerHTML =
-							`<div class="info">✅ Recording complete! Format: ${actualMimeType.split(';')[0]}. You can now play or send to Pi.</div>`;
+						recordingStatus.innerHTML = `<div class="info">✅ Recording complete! Format: ${
+							actualMimeType.split(";")[0]
+						}. You can now play or send to Pi.</div>`;
 					};
 
 					mediaRecorder.start(1000); // Record in 1-second chunks for better quality
@@ -262,19 +268,21 @@
 				}
 
 				const formData = new FormData();
-				
+
 				// Use proper filename based on actual format
 				let filename = "mic_audio.webm";
-				if (recordedBlob.type.includes('mp4')) {
+				if (recordedBlob.type.includes("mp4")) {
 					filename = "mic_audio.mp4";
-				} else if (recordedBlob.type.includes('wav')) {
+				} else if (recordedBlob.type.includes("wav")) {
 					filename = "mic_audio.wav";
-				} else if (recordedBlob.type.includes('ogg')) {
+				} else if (recordedBlob.type.includes("ogg")) {
 					filename = "mic_audio.ogg";
 				}
-				
+
 				formData.append("file", recordedBlob, filename);
-				console.log(`Sending audio file: ${filename}, type: ${recordedBlob.type}, size: ${recordedBlob.size} bytes`);
+				console.log(
+					`Sending audio file: ${filename}, type: ${recordedBlob.type}, size: ${recordedBlob.size} bytes`
+				);
 
 				try {
 					showStatus("📡 Sending audio to Pi speaker...", "info");
