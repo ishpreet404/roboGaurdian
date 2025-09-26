@@ -1,20 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import { useRobot } from '../context/RobotContext.jsx';
+import { useAssistant } from '../hooks/useAssistant.js';
 import AssistantConsole from '../components/AssistantConsole.jsx';
 import AssistantReminders from '../components/AssistantReminders.jsx';
 
 const AssistantPage = () => {
   const { windowsBaseUrl } = useRobot();
-  const [messages, setMessages] = useState([]);
-  const [reminders, setReminders] = useState([]);
-  const [sending, setSending] = useState(false);
+  const {
+    messages,
+    sendMessage,
+    sending,
+    error,
+    voiceReady,
+    reminders,
+    loadingReminders,
+    addReminder,
+    deleteReminder,
+    operatingMode,
+    modeMetadata,
+    availableModes,
+    watchdogAlarmActive,
+    updatingMode,
+    modeError,
+    setMode,
+    silenceWatchdogAlarm,
+  } = useAssistant();
+
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [voiceReady, setVoiceReady] = useState(false);
 
   // Load initial data
   useEffect(() => {
-    loadReminders();
     checkVoiceStatus();
   }, []);
 
@@ -29,121 +44,7 @@ const AssistantPage = () => {
     }
   };
 
-  const loadReminders = async () => {
-    setLoading(true);
-    console.log('Loading reminders from:', `${windowsBaseUrl}/api/assistant/reminders`);
-    try {
-      const response = await fetch(`${windowsBaseUrl}/api/assistant/reminders`);
-      const data = await response.json();
-      console.log('Reminders response:', { status: response.status, data });
-      if (response.ok && data.reminders) {
-        setReminders(data.reminders);
-        console.log('Reminders loaded:', data.reminders.length);
-      } else {
-        console.error('Reminders API error:', data);
-      }
-    } catch (err) {
-      console.error('Failed to load reminders:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const sendMessage = async (text) => {
-    setSending(true);
-    setError(null);
-    
-    // Add user message immediately
-    const userMessage = {
-      role: 'user',
-      content: text,
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => [...prev, userMessage]);
-
-    try {
-      const response = await fetch(`${windowsBaseUrl}/api/assistant/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, speak: true }),
-      });
-
-      const data = await response.json();
-      
-      if (response.ok) {
-        // Add assistant response
-        const assistantMessage = {
-          role: 'assistant',
-          content: data.response || 'Message sent to Pi speaker',
-          timestamp: new Date().toISOString(),
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      } else {
-        throw new Error(data.message || 'Failed to send message');
-      }
-    } catch (err) {
-      setError(err.message);
-      // Remove the user message if sending failed
-      setMessages(prev => prev.slice(0, -1));
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const createReminder = async (reminderData) => {
-    console.log('Creating reminder:', reminderData);
-    try {
-      const payload = {
-        message: reminderData.message,
-        ...(reminderData.remindAt ? 
-          { remind_at: reminderData.remindAt } : 
-          { delay_seconds: (reminderData.delayMinutes || 5) * 60 }
-        ),
-        ...(reminderData.voiceNote && { voice_note: reminderData.voiceNote }),
-      };
-
-      console.log('Reminder payload:', payload);
-      console.log('Sending to:', `${windowsBaseUrl}/api/assistant/reminders`);
-
-      const response = await fetch(`${windowsBaseUrl}/api/assistant/reminders`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-      console.log('Create reminder response:', { status: response.status, data });
-      
-      if (response.ok) {
-        await loadReminders(); // Reload reminders
-        return data;
-      } else {
-        console.error('Create reminder error:', data);
-        throw new Error(data.message || 'Failed to create reminder');
-      }
-    } catch (err) {
-      console.error('Create reminder exception:', err);
-      throw new Error(err.message || 'Network error creating reminder');
-    }
-  };
-
-  const deleteReminder = async (id) => {
-    try {
-      const response = await fetch(`${windowsBaseUrl}/api/assistant/reminders/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        await loadReminders(); // Reload reminders
-      } else {
-        const data = await response.json();
-        throw new Error(data.message || 'Failed to delete reminder');
-      }
-    } catch (err) {
-      console.error('Failed to delete reminder:', err);
-      setError(err.message);
-    }
-  };
+  // All reminder and message functions are now provided by useAssistant hook
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#0a0b1f] via-[#111225] to-[#1a1b2f] px-6 py-12">
@@ -169,6 +70,14 @@ const AssistantPage = () => {
               sending={sending}
               error={error}
               voiceReady={voiceReady}
+              mode={operatingMode}
+              modeMetadata={modeMetadata}
+              availableModes={availableModes}
+              onModeSelect={setMode}
+              updatingMode={updatingMode}
+              modeError={modeError}
+              watchdogAlarmActive={watchdogAlarmActive}
+              onSilenceAlarm={silenceWatchdogAlarm}
             />
           </div>
 
@@ -176,9 +85,9 @@ const AssistantPage = () => {
           <div className="space-y-8">
             <AssistantReminders
               reminders={reminders}
-              onCreate={createReminder}
+              onCreate={addReminder}
               onDelete={deleteReminder}
-              loading={loading}
+              loading={loadingReminders}
             />
 
             {/* Voice Companion */}
