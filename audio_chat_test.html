@@ -236,7 +236,15 @@
 						}
 					);
 
-					const result = await response.json();
+					let result;
+					const responseText = await response.text();
+					
+					try {
+						result = JSON.parse(responseText);
+					} catch (parseErr) {
+						showStatus(`❌ Server returned non-JSON response (${response.status}): ${responseText.substring(0, 200)}`, "error");
+						return;
+					}
 
 					if (response.ok) {
 						showStatus(
@@ -270,7 +278,15 @@
 						}
 					);
 
-					const result = await response.json();
+					let result;
+					const responseText = await response.text();
+					
+					try {
+						result = JSON.parse(responseText);
+					} catch (parseErr) {
+						showStatus(`❌ Server returned non-JSON response (${response.status}): ${responseText.substring(0, 200)}`, "error");
+						return;
+					}
 
 					if (response.ok) {
 						showStatus(
@@ -313,7 +329,15 @@
 						}
 					);
 
-					const result = await response.json();
+					let result;
+					const responseText = await response.text();
+					
+					try {
+						result = JSON.parse(responseText);
+					} catch (parseErr) {
+						showStatus(`❌ Server returned non-JSON response (${response.status}): ${responseText.substring(0, 200)}`, "error");
+						return;
+					}
 
 					if (response.ok) {
 						showStatus(
