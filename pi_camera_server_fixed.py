@@ -511,69 +511,94 @@ def _convert_to_wav(input_path: str) -> str:
     """Convert audio file to WAV format for better Pi compatibility"""
     output_path = input_path.rsplit('.', 1)[0] + '_converted.wav'
     
-    # Try ffmpeg conversion first
+    # Try ffmpeg conversion with noise reduction and normalization
     try:
         subprocess.run([
-            'ffmpeg', '-i', input_path, 
-            '-acodec', 'pcm_s16le',  # 16-bit PCM
-            '-ar', '22050',          # 22kHz sample rate (good for speech)
-            '-ac', '1',              # Mono
-            '-y',                    # Overwrite output
-            '-loglevel', 'quiet',
+            'ffmpeg', '-i', input_path,
+            '-acodec', 'pcm_s16le',     # 16-bit PCM (most compatible)
+            '-ar', '22050',             # 22kHz sample rate (good for speech on Pi)
+            '-ac', '1',                 # Mono (reduces noise and file size)
+            '-af', 'highpass=f=80,lowpass=f=8000,volume=1.5', # Filter noise and boost volume
+            '-sample_fmt', 's16',       # Ensure 16-bit signed format
+            '-y',                       # Overwrite output
+            '-loglevel', 'error',       # Only show errors
             output_path
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        logger.debug('🔄 Converted %s to WAV format', input_path)
+        logger.debug('🔄 Converted %s to clean WAV format with noise filtering', input_path)
         return output_path
         
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        logger.warning('⚠️ FFmpeg conversion failed, using original file')
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        logger.warning('⚠️ FFmpeg conversion failed: %s, using original file', e)
         return input_path
 
 
 def _play_audio_file(file_path: str) -> bool:
+    """Play audio file with aggressive noise reduction for Pi audio chat"""
     extension = Path(file_path).suffix.lower()
     
-    # Convert non-WAV files to WAV for better compatibility
-    if extension not in {'.wav', '.wave'}:
-        converted_path = _convert_to_wav(file_path)
-        if converted_path != file_path:
-            # Use converted file and clean up after
-            try:
-                success = _play_audio_file_direct(converted_path)
-                os.remove(converted_path)  # Clean up converted file
-                return success
-            except Exception as exc:
-                logger.warning('⚠️ Conversion playback failed: %s', exc)
-                # Fall back to original file
+    # ALWAYS convert to clean WAV for audio chat to eliminate noise
+    converted_path = _convert_to_wav(file_path)
     
+    # If conversion succeeded, use the converted file
+    if converted_path != file_path:
+        try:
+            success = _play_audio_file_direct(converted_path)
+            os.remove(converted_path)  # Clean up converted file
+            if success:
+                logger.info('🎵 Audio played successfully after conversion')
+                return True
+        except Exception as exc:
+            logger.warning('⚠️ Conversion playback failed: %s', exc)
+    
+    # Fallback to original file only if conversion failed
+    logger.warning('🔄 Using original file as fallback (may have noise)')
     return _play_audio_file_direct(file_path)
 
 
 def _play_audio_file_direct(file_path: str) -> bool:
-    """Play audio file directly without conversion"""
-    commands = []
+    """Play audio file directly with optimized settings for Pi"""
     extension = Path(file_path).suffix.lower()
     
-    # For WAV files, prefer aplay (ALSA) for best quality
-    if extension in {'.wav', '.wave'}:
-        commands.append(['aplay', '-q', file_path])
+    # Build commands with Pi-optimized settings
+    commands = []
     
-    # Universal players that handle multiple formats
+    # For WAV files, use aplay with specific hardware settings
+    if extension in {'.wav', '.wave'}:
+        commands.extend([
+            # Try with specific format settings (most reliable for Pi)
+            ['aplay', '-D', 'hw:0,0', '-r', '22050', '-f', 'S16_LE', '-c', '1', file_path],
+            # Fallback to default device
+            ['aplay', '-q', file_path],
+        ])
+    
+    # Universal players with Pi-optimized settings
     commands.extend([
-        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
-        ['mpv', '--really-quiet', file_path],
+        # FFplay with audio driver specification
+        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'error', 
+         '-af', 'volume=1.2', file_path],  # Slight volume boost
+        # MPV with ALSA driver
+        ['mpv', '--audio-driver=alsa', '--really-quiet', 
+         '--audio-channels=mono', file_path],
     ])
 
     for command in commands:
         try:
-            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            result = subprocess.run(command, check=True, 
+                                  stdout=subprocess.DEVNULL, 
+                                  stderr=subprocess.PIPE,
+                                  text=True, timeout=30)
             logger.debug('🔊 Audio played successfully with %s', command[0])
             return True
         except FileNotFoundError:
+            logger.debug('⏸️ Audio player %s not available', command[0])
             continue
-        except subprocess.CalledProcessError as exc:  # pragma: no cover - playback specific
-            logger.warning('⚠️ Audio command failed (%s): %s', command[0], exc)
+        except subprocess.TimeoutExpired:
+            logger.warning('⏰ Audio playback timeout with %s', command[0])
+            continue
+        except subprocess.CalledProcessError as exc:
+            logger.warning('⚠️ Audio command failed (%s): %s', command[0], 
+                         exc.stderr[:100] if exc.stderr else 'unknown error')
             continue
 
     logger.error('❌ No compatible audio player found for %s', file_path)
@@ -692,17 +717,30 @@ class PiFallbackSpeaker:
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
                 tts.save(tmp_file.name)
                 
-                # Play using pygame
+                # Play using pygame with Pi-optimized settings
+                pygame.mixer.pre_init(
+                    frequency=22050,    # Match our conversion rate
+                    size=-16,          # 16-bit signed
+                    channels=1,        # Mono
+                    buffer=1024        # Smaller buffer for less latency
+                )
                 pygame.mixer.init()
-                pygame.mixer.music.load(tmp_file.name)
-                pygame.mixer.music.play()
                 
-                # Wait for playback to complete
-                while pygame.mixer.music.get_busy():
-                    time.sleep(0.1)
-                
-                # Cleanup
-                pygame.mixer.quit()
+                # Load and play with error handling
+                try:
+                    pygame.mixer.music.load(tmp_file.name)
+                    pygame.mixer.music.set_volume(0.8)  # Prevent clipping/distortion
+                    pygame.mixer.music.play()
+
+                    # Wait for playback to complete
+                    while pygame.mixer.music.get_busy():
+                        time.sleep(0.1)
+                except pygame.error as e:
+                    logger.warning('⚠️ Pygame playback error: %s', e)
+                    # Don't return False here, let it fall through to cleanup
+                finally:
+                    # Cleanup
+                    pygame.mixer.quit()
                 os.unlink(tmp_file.name)
                 
             return True
