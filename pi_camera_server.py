@@ -32,6 +32,12 @@ import os
 import psutil
 from datetime import datetime
 from flask import Flask, Response, request, jsonify, render_template_string
+from flask_cors import CORS
+
+try:
+    from pi_voice_chatbot_single import VoiceChatbotService
+except Exception:
+    VoiceChatbotService = None
 import serial
 import logging
 
@@ -40,6 +46,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
 
 class PiCameraServer:
     def __init__(self):
@@ -314,6 +321,13 @@ class PiCameraServer:
                     temperature = f"{temp:.1f}°C"
             except Exception:
                 pass
+
+            voice_ready = False
+            if assistant_service:
+                try:
+                    voice_ready = bool(assistant_service.status().get('voice_ready'))
+                except Exception as voice_error:
+                    logger.warning(f"⚠️ Voice assistant status failed: {voice_error}")
                 
             return {
                 'status': 'running',
@@ -331,7 +345,8 @@ class PiCameraServer:
                 'cpu_usage': f"{cpu_percent:.1f}%",
                 'memory_usage': f"{memory.percent:.1f}%",
                 'disk_usage': f"{disk.percent:.1f}%",
-                'temperature': temperature
+                'temperature': temperature,
+                'voice_ready': voice_ready
             }
             
         except Exception as e:
@@ -340,6 +355,27 @@ class PiCameraServer:
 
 # Global server instance
 server = PiCameraServer()
+
+assistant_service = None
+if VoiceChatbotService:
+    try:
+        assistant_service = VoiceChatbotService()
+        logger.info("🎙️ Voice assistant initialised")
+    except Exception as assistant_error:
+        logger.error(f"❌ Voice assistant init failed: {assistant_error}")
+        assistant_service = None
+else:
+    logger.warning("ℹ️ Voice assistant module unavailable; skipping assistant features.")
+
+VALID_MODES = {"care_companion", "watchdog", "edumate"}
+mode_state = {
+    'mode': 'care_companion',
+    'metadata': {},
+    'updated_at': datetime.utcnow().isoformat(),
+    'watchdog_alarm_active': False,
+    'last_summary': None,
+}
+mode_state_lock = threading.Lock()
 
 # Flask routes
 @app.route('/')
@@ -617,6 +653,176 @@ def get_status():
             'status': 'error',
             'message': str(e)
         }), 500
+
+
+@app.route('/assistant/status', methods=['GET'])
+def assistant_status():
+    if not assistant_service:
+        return jsonify({'status': 'offline', 'voice_ready': False}), 503
+
+    try:
+        status = assistant_service.status()
+        status['status'] = 'online'
+        with mode_state_lock:
+            status.update({
+                'mode': mode_state.get('mode', 'care_companion'),
+                'mode_metadata': mode_state.get('metadata', {}),
+                'mode_updated_at': mode_state.get('updated_at'),
+                'watchdog_alarm_active': mode_state.get('watchdog_alarm_active', False),
+            })
+        return jsonify(status)
+    except Exception as exc:
+        logger.error(f"❌ Assistant status error: {exc}")
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/assistant/mode', methods=['GET', 'POST'])
+def assistant_mode():
+    if request.method == 'GET':
+        with mode_state_lock:
+            payload = {
+                'status': 'success',
+                'mode': mode_state.get('mode', 'care_companion'),
+                'metadata': mode_state.get('metadata', {}),
+                'updated_at': mode_state.get('updated_at'),
+                'watchdog_alarm_active': mode_state.get('watchdog_alarm_active', False),
+                'last_summary': mode_state.get('last_summary'),
+            }
+        return jsonify(payload)
+
+    data = request.get_json(silent=True) or {}
+    action = (data.get('action') or '').strip().lower()
+
+    if action and action not in {'silence_alarm', 'status_update'}:
+        return jsonify({'status': 'error', 'message': 'Unsupported action'}), 400
+
+    mode = (data.get('mode') or '').strip().lower()
+    metadata_payload = data.get('metadata')
+    summary = data.get('summary')
+    speak_summary = bool(data.get('speak'))
+    watchdog_flag = data.get('watchdog_alarm_active')
+
+    if mode and mode not in VALID_MODES:
+        return jsonify({'status': 'error', 'message': 'Invalid mode supplied'}), 400
+
+    if metadata_payload is not None and not isinstance(metadata_payload, dict):
+        return jsonify({'status': 'error', 'message': 'metadata must be an object'}), 400
+
+    with mode_state_lock:
+        if mode:
+            mode_state['mode'] = mode
+            mode_state['metadata'] = metadata_payload or {}
+            mode_state['updated_at'] = datetime.utcnow().isoformat()
+        elif metadata_payload is not None:
+            mode_state['metadata'] = metadata_payload
+
+        if watchdog_flag is not None:
+            mode_state['watchdog_alarm_active'] = bool(watchdog_flag)
+
+        if action == 'silence_alarm':
+            mode_state['watchdog_alarm_active'] = False
+
+        if summary:
+            mode_state['last_summary'] = summary
+
+        response_snapshot = {
+            'mode': mode_state.get('mode', 'care_companion'),
+            'metadata': mode_state.get('metadata', {}),
+            'updated_at': mode_state.get('updated_at'),
+            'watchdog_alarm_active': mode_state.get('watchdog_alarm_active', False),
+            'last_summary': mode_state.get('last_summary'),
+        }
+
+    if summary and assistant_service:
+        try:
+            assistant_service.add_system_note(summary, speak=speak_summary)
+        except Exception as exc:
+            logger.error(f"⚠️ Failed to log assistant summary: {exc}")
+
+    return jsonify({'status': 'success', **response_snapshot})
+
+
+@app.route('/assistant/message', methods=['POST'])
+def assistant_message():
+    if not assistant_service:
+        return jsonify({'status': 'offline', 'message': 'Voice assistant not available'}), 503
+
+    data = request.get_json(silent=True) or {}
+    text = data.get('text') or data.get('message')
+    speak = data.get('speak', True)
+    history_limit = data.get('history_limit', 20)
+
+    try:
+        result = assistant_service.process_text(text, speak_reply=bool(speak))
+        history = assistant_service.get_history(limit=int(history_limit))
+        return jsonify({
+            'status': 'success',
+            'reply': result['reply'],
+            'timestamp': result['timestamp'],
+            'history': history
+        })
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    except Exception as exc:
+        logger.error(f"❌ Assistant message error: {exc}")
+        return jsonify({'status': 'error', 'message': 'Assistant processing failed'}), 500
+
+
+@app.route('/assistant/reminders', methods=['GET', 'POST'])
+def assistant_reminders():
+    if not assistant_service:
+        return jsonify({'status': 'offline', 'message': 'Voice assistant not available'}), 503
+
+    if request.method == 'GET':
+        try:
+            reminders = assistant_service.list_reminders()
+            return jsonify({'status': 'success', 'reminders': reminders})
+        except Exception as exc:
+            logger.error(f"❌ Assistant reminder fetch error: {exc}")
+            return jsonify({'status': 'error', 'message': 'Failed to fetch reminders'}), 500
+
+    data = request.get_json(silent=True) or {}
+    message = data.get('message') or data.get('text')
+    remind_at = data.get('remind_at') or data.get('time')
+    delay_seconds = data.get('delay_seconds')
+    if delay_seconds is None:
+        delay_minutes = data.get('delay_minutes')
+        if delay_minutes is not None:
+            try:
+                delay_seconds = float(delay_minutes) * 60.0
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': 'Invalid delay_minutes value'}), 400
+
+    voice_note = data.get('voice_note') or data.get('voiceNote')
+
+    try:
+        reminder = assistant_service.add_reminder(
+            message,
+            remind_at=remind_at,
+            delay_seconds=delay_seconds,
+            voice_note=voice_note
+        )
+        return jsonify({'status': 'success', 'reminder': reminder}), 201
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    except Exception as exc:
+        logger.error(f"❌ Assistant reminder create error: {exc}")
+        return jsonify({'status': 'error', 'message': 'Failed to create reminder'}), 500
+
+
+@app.route('/assistant/reminders/<reminder_id>', methods=['DELETE'])
+def assistant_delete_reminder(reminder_id):
+    if not assistant_service:
+        return jsonify({'status': 'offline', 'message': 'Voice assistant not available'}), 503
+
+    try:
+        removed = assistant_service.remove_reminder(reminder_id)
+        if not removed:
+            return jsonify({'status': 'error', 'message': 'Reminder not found'}), 404
+        return jsonify({'status': 'success', 'reminder': removed})
+    except Exception as exc:
+        logger.error(f"❌ Assistant reminder delete error: {exc}")
+        return jsonify({'status': 'error', 'message': 'Failed to delete reminder'}), 500
 
 if __name__ == '__main__':
     logger.info("🥧 Pi Robot Camera Server Starting...")

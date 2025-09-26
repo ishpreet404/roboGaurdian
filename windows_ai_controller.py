@@ -78,6 +78,36 @@ class WindowsAIController:
         self.pending_turn_sequence = None
         self.last_turn_sequence_info = {'stops_sent': 0, 'total_stops': 0}
 
+        # Multi-mode behaviour (care companion, watchdog, edumate)
+        self.operating_mode = 'care_companion'
+        self.mode_metadata = {}
+        self.mode_lock = threading.Lock()
+        self.available_modes = [
+            {
+                'id': 'care_companion',
+                'label': 'Care Companion',
+                'description': 'Friendly reminders, Hindi assistant, and gentle alerts.',
+            },
+            {
+                'id': 'watchdog',
+                'label': 'Watchdog',
+                'description': 'Security sweep mode with loud alarms on motion.',
+            },
+            {
+                'id': 'edumate',
+                'label': 'Edumate',
+                'description': 'Parents push Hindi lessons; robot stays still and listens.',
+            },
+        ]
+        self.watchdog_alert_interval = 8.0
+        self._last_watchdog_alert = 0.0
+        self._watchdog_person_present = False
+        self._watchdog_alarm_stop = threading.Event()
+        self._watchdog_alarm_thread = None
+        self._watchdog_alarm_active = False
+        self._auto_tracking_before_mode = self.auto_tracking.get()
+        self._mode_summary_cache = None
+
         # Inference performance tuning - OPTIMIZED
         self.inference_size = 224            # Smaller size for much faster inference (224 vs 320)
         self.max_inference_fps = 5           # Reduced from 8 to 5 FPS to prevent overload
@@ -559,33 +589,41 @@ class WindowsAIController:
                     cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(processed_frame, f'Person {conf:.2f}', (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                # Auto tracking logic - FIXED
-                if self.auto_tracking.get():
+                with self.mode_lock:
+                    active_mode = self.operating_mode
+
+                # Auto tracking logic only in care companion mode
+                if active_mode == 'care_companion' and self.auto_tracking.get():
                     if detections:
-                        # Person found - stop search mode and track
                         if hasattr(self, 'search_active') and self.search_active:
                             self.search_active = False
                             if self.turn_sequence_active():
                                 self.pending_turn_sequence = None
-                            self.send_command('S', auto=True, force=True)  # Stop first
-                            # Hide search overlay
+                            self.send_command('S', auto=True, force=True)
                             self.update_search_overlay("", "")
                             self.log("🎯 Person found! Stopping search, starting tracking")
-                            time.sleep(0.2)  # Brief pause before tracking
-                        
+                            time.sleep(0.2)
+
                         self.process_auto_tracking(detections, processed_frame.shape)
                     else:
-                        # No person detected - start/continue search
                         self.process_search_mode()
+                else:
+                    if hasattr(self, 'search_active') and self.search_active:
+                        self.search_active = False
+                        self.update_search_overlay("", "")
 
-                # Crying detection: check largest person to reduce CPU
-                if self.crying_detection_enabled.get() and detections:
+                self._handle_mode_logic(active_mode, detections, now)
+
+                # Crying detection only makes sense in care companion mode
+                if active_mode == 'care_companion' and self.crying_detection_enabled.get() and detections:
                     try:
-                        # pick largest detection
                         target = max(detections, key=lambda d: d.get('area', 0))
                         self.detect_crying(frame, target['box'], processed_frame)
                     except Exception as e:
                         self.log(f"⚠️ Crying detect call failed: {e}")
+                elif active_mode != 'care_companion' and self.crying_detected:
+                    self.crying_detected = False
+                    self.root.after(0, lambda: self.crying_status.config(text="😊 No Crying", fg='lime'))
                 
                 # Update display
                 self.update_video_display(processed_frame)
@@ -1224,6 +1262,275 @@ class WindowsAIController:
             self.log(f"⏱️ Command {command} timeout (Pi slow/busy)")
         except Exception as e:
             self.log(f"❌ Command {command} error: {e}")
+
+    # ------------------------------------------------------------------
+    # Mode management
+    # ------------------------------------------------------------------
+    def _normalize_mode(self, mode: str) -> str:
+        normalized = (mode or '').strip().lower()
+        if normalized not in {'care_companion', 'watchdog', 'edumate'}:
+            raise ValueError(f"Unsupported operating mode: {mode}")
+        return normalized
+
+    def get_available_modes(self):
+        return list(self.available_modes)
+
+    def set_operating_mode(self, mode: str, *, metadata=None, summary: str | None = None, speak_summary: bool = False):
+        normalized = self._normalize_mode(mode)
+        metadata = metadata or {}
+
+        with self.mode_lock:
+            previous_mode = self.operating_mode
+            previous_metadata = dict(self.mode_metadata)
+            if normalized != previous_mode:
+                self.operating_mode = normalized
+                self.mode_metadata = dict(metadata)
+            else:
+                merged = dict(previous_metadata)
+                merged.update(metadata)
+                self.mode_metadata = merged
+
+            current_metadata = dict(self.mode_metadata)
+
+        if normalized != previous_mode:
+            self.log(f"🎛️ Mode change: {previous_mode} → {normalized}")
+            self._on_mode_exit(previous_mode)
+            self._on_mode_enter(normalized, current_metadata)
+        else:
+            self._on_mode_update(normalized, current_metadata, previous_metadata)
+
+        mode_summary = summary or self._mode_summary_for(normalized, current_metadata, previous_mode)
+
+        if normalized == 'edumate' and metadata.get('prompt'):
+            prompt_text = metadata['prompt']
+            delivered = self.trigger_edumate_prompt(prompt_text, speak=True)
+            timestamp = datetime.utcnow().isoformat()
+            with self.mode_lock:
+                self.mode_metadata['last_prompt'] = prompt_text
+                self.mode_metadata['last_prompt_at'] = timestamp
+            if delivered:
+                self.register_manual_alert('Edumate prompt delivered', prompt_text, level='info')
+            else:
+                self.register_manual_alert('Edumate prompt failed', prompt_text, level='warning')
+                mode_summary = f"⚠️ Edumate पाठ भेजने में समस्या आयी: {prompt_text}" if not summary else mode_summary
+
+        self._sync_mode_to_pi(
+            mode=self.operating_mode,
+            metadata=self.mode_metadata,
+            summary=mode_summary,
+            speak=speak_summary and normalized == 'edumate',
+            watchdog_alarm_active=self._watchdog_alarm_active,
+        )
+
+        return {'mode': self.operating_mode, 'metadata': dict(self.mode_metadata)}
+
+    def _on_mode_enter(self, mode: str, metadata: dict | None = None) -> None:
+        if mode in {'watchdog', 'edumate'}:
+            self._auto_tracking_before_mode = self.auto_tracking.get()
+            if self.auto_tracking.get():
+                self.auto_tracking.set(False)
+                self.log('🤖 Auto tracking paused for new mode')
+            if hasattr(self, 'search_active'):
+                self.search_active = False
+                self.update_search_overlay('', '')
+            self.send_command('S', auto=True, force=True)
+
+        if mode == 'watchdog':
+            self._watchdog_person_present = False
+            self._last_watchdog_alert = 0.0
+            self._stop_watchdog_alarm()
+            self.register_manual_alert('Watchdog mode armed', 'Security sweep is active.', level='warning')
+        elif mode == 'edumate':
+            self._stop_watchdog_alarm()
+            self.register_manual_alert('Edumate mode ready', 'Robot will stay still for lessons.', level='info')
+        elif mode == 'care_companion':
+            if self._auto_tracking_before_mode:
+                self.auto_tracking.set(True)
+            self._stop_watchdog_alarm()
+
+    def _on_mode_exit(self, mode: str) -> None:
+        if mode == 'watchdog':
+            self._stop_watchdog_alarm()
+            self._watchdog_person_present = False
+
+    def _on_mode_update(self, mode: str, current_metadata: dict, previous_metadata: dict) -> None:
+        if mode == 'watchdog':
+            alarm_active = current_metadata.get('alarm_active')
+            if alarm_active is False:
+                self._stop_watchdog_alarm()
+
+    def _mode_summary_for(self, mode: str, metadata: dict | None = None, previous: str | None = None) -> str:
+        metadata = metadata or {}
+        if mode == 'care_companion':
+            return "💞 मोड अपडेट: सिस्टम अब 'Care Companion' मोड में है—मित्रवत रिमाइंडर और बातचीत सक्रिय हैं।"
+        if mode == 'watchdog':
+            return "🛡️ मोड अपडेट: 'Watchdog' निगरानी मोड सक्रिय है। हलचल मिलते ही तेज अलार्म बजेगा।"
+        if mode == 'edumate':
+            prompt = metadata.get('prompt') or metadata.get('last_prompt')
+            if prompt:
+                clean_prompt = (prompt[:140] + '…') if len(prompt) > 140 else prompt
+                return f"📚 मोड अपडेट: 'Edumate' सीखने वाला मोड सक्रिय। नया पाठ: {clean_prompt}"
+            return "📚 मोड अपडेट: 'Edumate' सीखने वाला मोड सक्रिय है। परिवार के पाठ तुरंत चलेंगे।"
+        return f"ℹ️ Mode changed to {mode}"
+
+    def _sync_mode_to_pi(self, *, mode: str | None = None, metadata: dict | None = None, summary: str | None = None, speak: bool = False, watchdog_alarm_active: bool | None = None) -> None:
+        payload: dict[str, object] = {}
+        if mode is not None:
+            payload['mode'] = mode
+        if metadata is None:
+            with self.mode_lock:
+                metadata_copy = dict(self.mode_metadata)
+        else:
+            metadata_copy = dict(metadata)
+        if metadata_copy:
+            payload['metadata'] = metadata_copy
+        if summary:
+            payload['summary'] = summary
+        if speak:
+            payload['speak'] = True
+        if watchdog_alarm_active is not None:
+            payload['watchdog_alarm_active'] = bool(watchdog_alarm_active)
+
+        if not payload:
+            return
+
+        try:
+            response = requests.post(
+                f"{self.PI_BASE_URL}/assistant/mode",
+                json=payload,
+                timeout=5,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            self.log(f"⚠️ Mode sync failed: {exc}")
+
+    def _handle_mode_logic(self, mode: str, detections, timestamp: float) -> None:
+        if mode == 'watchdog':
+            self._handle_watchdog_mode(detections, timestamp)
+        elif mode == 'edumate':
+            self._handle_edumate_mode(detections, timestamp)
+        else:
+            self._stop_watchdog_alarm()
+
+    def _handle_watchdog_mode(self, detections, timestamp: float) -> None:
+        person_present = bool(detections)
+
+        if person_present and not self._watchdog_person_present:
+            self._last_watchdog_alert = timestamp
+            self.register_manual_alert(
+                'Watchdog alert',
+                'कक्ष में हलचल मिली—अलार्म सक्रिय है।',
+                level='danger',
+            )
+            with self.mode_lock:
+                self.mode_metadata['last_detection_at'] = datetime.utcnow().isoformat()
+            self._start_watchdog_alarm()
+        elif person_present:
+            if timestamp - self._last_watchdog_alert >= self.watchdog_alert_interval:
+                self._last_watchdog_alert = timestamp
+                self.register_manual_alert(
+                    'Watchdog ongoing',
+                    'निगरानी अलार्म अभी भी बज रहा है।',
+                    level='warning',
+                )
+            self._start_watchdog_alarm()
+        else:
+            if self._watchdog_person_present:
+                self.register_manual_alert(
+                    'Watchdog clear',
+                    'क्षेत्र साफ है। अलार्म रोका गया।',
+                    level='success',
+                )
+            self._stop_watchdog_alarm()
+
+        self._watchdog_person_present = person_present
+
+    def _handle_edumate_mode(self, detections, timestamp: float) -> None:
+        learner_present = bool(detections)
+        with self.mode_lock:
+            self.mode_metadata['learner_present'] = learner_present
+            self.mode_metadata['last_check_at'] = datetime.utcnow().isoformat()
+
+    def _set_watchdog_alarm_state(self, active: bool, summary: str | None = None) -> None:
+        if self._watchdog_alarm_active == active and not summary:
+            return
+
+        self._watchdog_alarm_active = active
+        with self.mode_lock:
+            self.mode_metadata['alarm_active'] = active
+
+        if active:
+            self.log('🔔 Watchdog alarm engaged')
+        else:
+            self.log('🔕 Watchdog alarm silenced')
+
+        self._sync_mode_to_pi(
+            mode=None,
+            metadata=self.mode_metadata,
+            summary=summary,
+            watchdog_alarm_active=active,
+        )
+
+    def _start_watchdog_alarm(self) -> None:
+        if self._watchdog_alarm_active:
+            return
+        self._watchdog_alarm_stop.clear()
+        self._set_watchdog_alarm_state(True)
+        thread = threading.Thread(target=self._watchdog_alarm_loop, name='WatchdogAlarmLoop', daemon=True)
+        self._watchdog_alarm_thread = thread
+        thread.start()
+
+    def _stop_watchdog_alarm(self) -> None:
+        if not self._watchdog_alarm_active and not (self._watchdog_alarm_thread and self._watchdog_alarm_thread.is_alive()):
+            return
+        self._watchdog_alarm_stop.set()
+        self._set_watchdog_alarm_state(False)
+        self._watchdog_alarm_thread = None
+
+    def _watchdog_alarm_loop(self) -> None:
+        while not self._watchdog_alarm_stop.wait(1.2):
+            try:
+                self.play_crying_alert()
+            except Exception as exc:
+                self.log(f"⚠️ Watchdog alarm beep failed: {exc}")
+
+    def silence_watchdog_alarm(self) -> None:
+        self._stop_watchdog_alarm()
+        self._watchdog_person_present = False
+        self._last_watchdog_alert = time.time()
+        self.register_manual_alert(
+            'Watchdog alarm silenced',
+            'डैशबोर्ड से निगरानी अलार्म बंद किया गया है।',
+            level='info',
+        )
+        self._sync_mode_to_pi(
+            mode=None,
+            metadata=self.mode_metadata,
+            summary='🕊️ Watchdog अलार्म डैशबोर्ड से शांत किया गया।',
+            watchdog_alarm_active=False,
+        )
+
+    def trigger_edumate_prompt(self, prompt: str, *, speak: bool = True) -> bool:
+        text = (prompt or '').strip()
+        if not text:
+            return False
+
+        try:
+            response = requests.post(
+                f"{self.PI_BASE_URL}/assistant/message",
+                json={
+                    'text': text,
+                    'speak': speak,
+                    'history_limit': 40,
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            self.log(f"📘 Edumate prompt delivered: {text[:80]}…")
+            return True
+        except Exception as exc:
+            self.log(f"⚠️ Edumate prompt delivery failed: {exc}")
+            return False
             
     def test_pi_connection(self):
         """Test connection to Pi server"""
@@ -1676,7 +1983,10 @@ class WindowsAIController:
                 if command == 'S' and self.turn_sequence_active():
                     self.pending_turn_sequence = None
                 self.send_command(command, auto=False, force=(command == 'S'))
-            
+    
+    def register_manual_alert(self, title: str, message: str, *, level: str = 'info') -> None:
+        self.log(f"[{level.upper()}] {title}: {message}")
+
     def log(self, message):
         """Add message to log"""
         timestamp = datetime.now().strftime("%H:%M:%S")

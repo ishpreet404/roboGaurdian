@@ -100,6 +100,7 @@ class WindowsRobotSupervisor:
         @app.route("/api/status", methods=["GET"])
         def status() -> Any:
             with self._lock:
+                mode_metadata = dict(controller.mode_metadata)
                 data = {
                     "pi_base_url": controller.PI_BASE_URL,
                     "pi_connected": bool(getattr(controller, "pi_connected", False)),
@@ -109,6 +110,10 @@ class WindowsRobotSupervisor:
                     "auto_tracking": bool(controller.auto_tracking.get()),
                     "voice_ready": controller.voice_ready,
                     "alerts": list(controller.bridge_alerts),
+                    "operating_mode": controller.operating_mode,
+                    "mode_metadata": mode_metadata,
+                    "watchdog_alarm_active": getattr(controller, "_watchdog_alarm_active", False),
+                    "available_modes": controller.get_available_modes(),
                 }
             return jsonify(data)
 
@@ -160,6 +165,63 @@ class WindowsRobotSupervisor:
             with self._lock:
                 events_payload = list(controller.bridge_events)
             return jsonify({"events": events_payload})
+
+        @app.route("/api/mode", methods=["GET", "POST"])
+        def operating_mode() -> Any:
+            if request.method == "GET":
+                with self._lock:
+                    return jsonify(
+                        {
+                            "mode": controller.operating_mode,
+                            "metadata": dict(controller.mode_metadata),
+                            "available_modes": controller.get_available_modes(),
+                            "watchdog_alarm_active": getattr(controller, "_watchdog_alarm_active", False),
+                        }
+                    )
+
+            payload = request.get_json(force=True, silent=True) or {}
+            action = (payload.get("action") or "").strip().lower()
+
+            try:
+                if action == "silence_alarm":
+                    with self._lock:
+                        controller.silence_watchdog_alarm()
+                        response_data = {
+                            "mode": controller.operating_mode,
+                            "metadata": dict(controller.mode_metadata),
+                            "watchdog_alarm_active": getattr(controller, "_watchdog_alarm_active", False),
+                        }
+                    return jsonify({"status": "success", **response_data})
+
+                mode = payload.get("mode")
+                if not mode:
+                    return jsonify({"status": "error", "message": "mode is required"}), 400
+
+                metadata = payload.get("metadata")
+                if metadata is not None and not isinstance(metadata, dict):
+                    return jsonify({"status": "error", "message": "metadata must be an object"}), 400
+
+                summary = payload.get("summary")
+                speak_summary = bool(payload.get("speak_summary"))
+
+                with self._lock:
+                    result = controller.set_operating_mode(
+                        mode,
+                        metadata=metadata or {},
+                        summary=summary,
+                        speak_summary=speak_summary,
+                    )
+                    result.update(
+                        {
+                            "available_modes": controller.get_available_modes(),
+                            "watchdog_alarm_active": getattr(controller, "_watchdog_alarm_active", False),
+                        }
+                    )
+                return jsonify({"status": "success", **result})
+            except ValueError as exc:  # noqa: BLE001
+                return jsonify({"status": "error", "message": str(exc)}), 400
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"status": "error", "message": str(exc)}), 500
 
     # ------------------------------------------------------------------
     # Lifecycle helpers

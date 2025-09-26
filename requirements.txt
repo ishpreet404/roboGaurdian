@@ -11,6 +11,7 @@ tkinter  # Usually comes with Python
 
 # New dependencies for crying detection and streaming
 flask>=2.3.0
+flask-cors>=4.0.0
 mediapipe>=0.10.0
 sounddevice>=0.4.6
 soundfile>=0.12.1

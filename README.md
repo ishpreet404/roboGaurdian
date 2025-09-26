@@ -4,6 +4,13 @@
 
 A complete AI-powered person tracking robot system using Raspberry Pi, ESP32, and Windows PC.A comprehensive desktop GUI application for real-time person/animal detection and tracking, designed to prototype and test monitoring robot behavior before deploying to hardware. Uses computer vision to detect and follow children or pets, generating movement commands for autonomous robots.
 
+## 🔔 Latest updates
+
+- Dashboard now includes a **Chirpy assistant console** that lets you chat with the Pi voice agent directly from the browser. All requests are relayed over the new `/assistant/message` API.
+- A **reminder scheduler with optional voice notes** is exposed at `/assistant/reminders`, allowing timed announcements that play automatically through the Pi speaker.
+- Cross-origin requests are enabled on the Pi server so the Vite frontend can dispatch robot commands and assistant actions without extra proxies.
+- Introduced **multi-mode behaviour**—including Care Companion, Watchdog, and Edumate—with synced alerts, dashboard controls to silence alarms, and automatic history summaries.
+
 
 
 ## 📁 Project Structure## The Problem It Solves
