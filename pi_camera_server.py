@@ -106,39 +106,86 @@ class PiCameraServer:
             logger.error("   Make sure UART is enabled: sudo raspi-config → Interface Options → Serial Port")
             self.uart_connected = False
             
-        # Initialize camera
+        # Initialize camera with multiple fallback methods
         try:
-            # Try different camera indices (Pi Camera or USB)
-            for camera_id in [0, 1, -1]:
-                self.camera = cv2.VideoCapture(camera_id)
-                if self.camera.isOpened():
-                    logger.info(f"📹 Found camera at index {camera_id}")
-                    break
-                else:
-                    self.camera.release()
-                    
-            if not self.camera.isOpened():
-                raise Exception("No camera found - check camera connection")
-                
-            # Set optimized camera properties for ultra-low latency
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
-            self.camera.set(cv2.CAP_PROP_FPS, self.fps)
-            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering for low latency
-            # Additional low-latency optimizations
-            self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))  # Use MJPEG for faster capture
-            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Disable auto-exposure for consistent timing
+            camera_backends = [
+                (cv2.CAP_V4L2, "V4L2"),     # Linux Video4Linux2 (best for Pi)
+                (cv2.CAP_GSTREAMER, "GStreamer"),  # Alternative for Pi Camera
+                (cv2.CAP_ANY, "Auto")       # Fallback to any available backend
+            ]
+        
+        self.camera = None
+        camera_found = False
+        
+        for backend, backend_name in camera_backends:
+            logger.info(f"� Trying {backend_name} backend...")
             
-            # Test camera
-            ret, test_frame = self.camera.read()
-            if ret:
-                self.camera_active = True
-                logger.info(f"✅ Camera ready: {self.frame_width}x{self.frame_height} @ {self.fps}fps")
+            try:
+                # Try different camera indices with current backend
+                for camera_id in [0, 1, -1]:
+                    try:
+                        self.camera = cv2.VideoCapture(camera_id, backend)
+                        
+                        if self.camera.isOpened():
+                            logger.info(f"📹 Found camera at index {camera_id} with {backend_name}")
+                            
+                            # Set basic properties first
+                            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+                            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
+                            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
+                            
+                            # Test camera capture multiple times (sometimes first read fails)
+                            for attempt in range(3):
+                                ret, test_frame = self.camera.read()
+                                if ret and test_frame is not None:
+                                    logger.info(f"✅ Camera test successful on attempt {attempt + 1}")
+                                    camera_found = True
+                                    break
+                                else:
+                                    logger.warning(f"⚠️ Camera test attempt {attempt + 1} failed, retrying...")
+                                    time.sleep(0.1)
+                            
+                            if camera_found:
+                                # Apply advanced optimizations after successful test
+                                try:
+                                    self.camera.set(cv2.CAP_PROP_FPS, self.fps)
+                                    self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+                                    self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+                                except:
+                                    logger.warning("⚠️ Some advanced camera settings not supported")
+                                break
+                        
+                        if self.camera:
+                            self.camera.release()
+                            
+                    except Exception as e:
+                        logger.warning(f"⚠️ Camera {camera_id} with {backend_name} failed: {e}")
+                        if self.camera:
+                            self.camera.release()
+                            self.camera = None
                 
-                # Start camera capture thread
-                threading.Thread(target=self.camera_capture_loop, daemon=True).start()
-            else:
-                raise Exception("Camera test failed - check camera permissions")
+                if camera_found:
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ {backend_name} backend failed: {e}")
+        
+        if camera_found and self.camera and self.camera.isOpened():
+            self.camera_active = True
+            logger.info(f"✅ Camera ready: {self.frame_width}x{self.frame_height} @ {self.fps}fps")
+            
+            # Start camera capture thread
+            threading.Thread(target=self.camera_capture_loop, daemon=True).start()
+        else:
+            logger.error(f"❌ Camera initialization failed: no working camera found")
+            logger.error("   Troubleshooting steps:")
+            logger.error("   1. Check camera connection")
+            logger.error("   2. Enable camera: sudo raspi-config → Interface Options → Camera")  
+            logger.error("   3. Check permissions: sudo usermod -a -G video $USER")
+            logger.error("   4. Restart Pi: sudo reboot")
+            if self.camera:
+                self.camera.release()
+            self.camera_active = False
                 
         except Exception as e:
             logger.error(f"❌ Camera initialization failed: {e}")
