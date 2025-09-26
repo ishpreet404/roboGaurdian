@@ -125,8 +125,10 @@ class WindowsAIController:
         self.stream_fps = 15           # Increased for smoother display
         self.jpeg_quality = 50         # Lower quality for better performance  
         # Display throttling to avoid PhotoImage overload on main thread
-        self.display_fps = 20          # Increased for more responsive display
+        self.display_fps = 25          # Increased for 1080p display (higher FPS)
         self._last_display_time = 0
+        self.display_width = 960       # Display width for 1080p (half size for performance)
+        self.display_height = 540      # Display height for 1080p (half size for performance)
         
         # Memory management
         self.last_cleanup_time = 0
@@ -1603,8 +1605,8 @@ class WindowsAIController:
                 return
             self._last_display_time = now
 
-            # Resize frame for display
-            display_frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
+            # Resize frame for display (scale down 1080p to manageable size)
+            display_frame = cv2.resize(frame, (self.display_width, self.display_height), interpolation=cv2.INTER_LINEAR)
 
             # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)

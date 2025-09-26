@@ -56,11 +56,11 @@ class PiCameraServer:
         self.current_frame = None
         self.frame_lock = threading.Lock()
         
-        # Camera settings (optimized for streaming)
-        self.frame_width = 640
-        self.frame_height = 480
-        self.fps = 30
-        self.jpeg_quality = 80
+        # Camera settings (optimized for 1080p streaming)
+        self.frame_width = 1920   # Full 1080p width
+        self.frame_height = 1080  # Full 1080p height
+        self.fps = 60             # Standard 30 FPS for stability
+        self.jpeg_quality = 45    # Lower quality for better performance with higher resolution
         
         # Statistics
         self.commands_received = 0
@@ -111,11 +111,19 @@ class PiCameraServer:
             if not self.camera.isOpened():
                 raise Exception("No camera found - check camera connection")
                 
-            # Set optimized camera properties for robot streaming
+            # Set optimized camera properties for 1080p robot streaming
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
             self.camera.set(cv2.CAP_PROP_FPS, self.fps)
             self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering for low latency
+            
+            # Additional optimizations for 1080p performance
+            try:
+                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))  # Use MJPEG codec
+                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Enable auto exposure
+                self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)      # Enable auto focus if available
+            except Exception as e:
+                logger.warning(f"⚠️ Some advanced camera settings not supported: {e}")
             
             # Test camera
             ret, test_frame = self.camera.read()
@@ -186,9 +194,10 @@ class PiCameraServer:
                 except Exception as e:
                     logger.error(f"❌ Frame encoding error: {e}")
                     
-            else:
-                # No frame available, send placeholder
-                time.sleep(0.033)  # ~30 FPS fallback
+                else:
+                    # No frame available, send placeholder
+                    fallback_delay = 1.0 / self.fps if self.fps else 0.033
+                    time.sleep(fallback_delay)
                 
     def send_uart_command(self, command):
         """Send command to ESP32 via UART"""
@@ -496,7 +505,9 @@ def video_feed():
         headers={
             'Cache-Control': 'no-cache, no-store, must-revalidate',
             'Pragma': 'no-cache',
-            'Expires': '0'
+            'Expires': '0',
+            'X-Accel-Buffering': 'no',  # Disable proxy buffering
+            'Connection': 'keep-alive'   # Keep connection open for streaming
         }
     )
 
