@@ -534,32 +534,17 @@ def _convert_to_wav(input_path: str) -> str:
 
 
 def _play_audio_file(file_path: str) -> bool:
-    """Play audio file with Bluetooth speaker optimization"""
+    """Play audio file optimized for clean Bluetooth audio"""
     extension = Path(file_path).suffix.lower()
     
-    # For Bluetooth speakers: Try original file first (MP3/MP4 often work better)
-    logger.info('🎧 Attempting direct playback for Bluetooth compatibility: %s', extension)
+    # Since Bluetooth works perfectly, try direct playback first (no conversion noise)
+    logger.info('� Clean Bluetooth playback: %s', extension)
     
-    # Try direct playback first (better for Bluetooth + MP3)
     if _play_audio_file_direct(file_path):
-        logger.info('🎵 Direct playback successful (Bluetooth-friendly)')
+        logger.info('✅ Clean Bluetooth audio successful')
         return True
     
-    # If direct fails, try conversion as fallback
-    logger.warning('🔄 Direct playback failed, trying conversion...')
-    converted_path = _convert_to_wav(file_path)
-    
-    if converted_path != file_path:
-        try:
-            success = _play_audio_file_direct(converted_path)
-            os.remove(converted_path)  # Clean up converted file
-            if success:
-                logger.info('🎵 Audio played successfully after conversion')
-                return True
-        except Exception as exc:
-            logger.warning('⚠️ Conversion playback failed: %s', exc)
-    
-    logger.error('❌ All audio playback methods failed')
+    logger.error('❌ Bluetooth audio playback failed')
     return False
 
 

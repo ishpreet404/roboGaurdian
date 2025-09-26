@@ -29,29 +29,29 @@ const AudioChat = () => {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          sampleRate: 22050,  // Lower sample rate for better Pi compatibility
+          sampleRate: 44100,  // Higher quality sample rate (matches your working Bluetooth)
           channelCount: 1,    // Mono audio for smaller files
         },
       });
 
       recordedChunksRef.current = [];
       
-      // Choose the best format for Pi compatibility
+      // Choose the best format for clean Bluetooth audio
       let options = {};
       if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         options = {
           mimeType: 'audio/webm;codecs=opus',
-          audioBitsPerSecond: 48000  // Good quality for speech
+          audioBitsPerSecond: 128000  // Higher quality to prevent corruption
         };
       } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
         options = {
           mimeType: 'audio/mp4',
-          audioBitsPerSecond: 64000
+          audioBitsPerSecond: 128000  // Higher quality
         };
       } else if (MediaRecorder.isTypeSupported('audio/webm')) {
         options = {
           mimeType: 'audio/webm',
-          audioBitsPerSecond: 48000
+          audioBitsPerSecond: 96000   // Higher quality
         };
       }
       
