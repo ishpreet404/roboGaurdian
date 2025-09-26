@@ -11,6 +11,7 @@ A complete AI-powered person tracking robot system using Raspberry Pi, ESP32, an
 - Cross-origin requests are enabled on the Pi server so the Vite frontend can dispatch robot commands and assistant actions without extra proxies.
 - Introduced **multi-mode behaviour**—including Care Companion, Watchdog, and Edumate—with synced alerts, dashboard controls to silence alarms, and automatic history summaries.
 - 📘 For fresh installs, follow the end-to-end [deployment & usage guide](./SETUP_AND_USAGE.md).
+- 🛠️ Want a speaker-only Pi? Leave `PI_ASSISTANT_MODE` at the default `fallback` and skip the GitHub Models token—voice notes still play through the on-device TTS engine.
 
 
 

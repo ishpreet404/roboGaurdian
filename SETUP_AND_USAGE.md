@@ -7,7 +7,7 @@ This guide walks you through preparing the Windows control center, the Raspberry
 ## 1. High-level architecture
 
 - **Windows workstation** runs `windows_robot_supervisor.py` to expose REST APIs to the frontend and coordinate with the Pi.
-- **Raspberry Pi** runs `pi_camera_server_fixed.py`, handling camera streaming, UART commands to the ESP32, the voice assistant, reminders, and queued audio playback.
+- **Raspberry Pi** runs `pi_camera_server_fixed.py`, handling camera streaming, UART commands to the ESP32, speaker playback (audio files & TTS), and reminder scheduling.
 - **Frontend app (optional)** talks to the Windows supervisor APIs to control the system and upload voice notes.
 
 Voice notes flow from the browser → Windows supervisor → Pi `/assistant/voice_note` endpoint → local playback queue (or text-to-speech reminder).
@@ -84,9 +84,10 @@ pip install -r requirements.txt
 ```
 > You can also run `wget_pi_multimode.sh` from the repo to download all Pi-side files.
 
-### 4.4 Configure voice assistant (optional but recommended)
-- Export the same GitHub token environment variables used on Windows: add them to `~/.profile` or create a `.env` file and load it before running the Pi server.
-- Attach a USB/Bluetooth speaker. The fallback pyttsx3 engine will be used if the assistant cannot initialise.
+### 4.4 Configure voice output
+- Attach a USB/Bluetooth speaker (or use the Pi’s audio jack). The built-in `pyttsx3` fallback will speak reminders and text.
+- (Optional) To enable the GitHub-based assistant, export the same tokens used on Windows and set `PI_ASSISTANT_MODE=full`.
+- To keep the Pi in **speaker-only mode** (no GitHub API calls), leave the token unset and ensure `PI_ASSISTANT_MODE` is `fallback` (default).
 
 ### 4.5 Launch the Pi server
 ```bash
@@ -127,7 +128,7 @@ python3 pi_camera_server_fixed.py
   - `remind_at` (ISO string) **or** `delay_seconds` / `delay_minutes`
   - `voice_note` (optional text spoken at reminder time)
 - `DELETE /api/assistant/reminders/{id}` – cancel a reminder.
-- The Pi’s `ReminderManager` fires due reminders using the voice assistant or fallback speaker.
+- Reminders fire locally on the Pi—even without the GitHub assistant—using the fallback speaker.
 
 ### 6.3 Direct speaking
 - `POST /api/assistant/speak` with `text` to immediately queue speech (TTS).

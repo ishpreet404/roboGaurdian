@@ -33,6 +33,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, List
@@ -50,13 +52,22 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     pyttsx3 = None
 
-try:
-    from pi_voice_chatbot_single import VoiceChatbotService, _prepare_for_speech  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover - optional dependency
+ASSISTANT_MODE = os.getenv('PI_ASSISTANT_MODE', 'fallback').strip().lower()
+USE_GITHUB_ASSISTANT = ASSISTANT_MODE in {'full', 'github', 'assistant', 'chirpy', 'enabled'}
+
+if USE_GITHUB_ASSISTANT:
+    try:
+        from pi_voice_chatbot_single import VoiceChatbotService, _prepare_for_speech  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover - optional dependency
+        VoiceChatbotService = None  # type: ignore[assignment]
+
+        def _prepare_for_speech(text: str) -> str:  # type: ignore[override]
+            return text.strip()
+else:
     VoiceChatbotService = None  # type: ignore[assignment]
 
-    def _prepare_for_speech(text: str) -> str:  # type: ignore[override]
-        return text
+    def _prepare_for_speech(text: str) -> str:
+        return (text or '').strip()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -440,6 +451,30 @@ def _parse_delay_values(*, seconds_value: Any = None, minutes_value: Any = None)
     return delay
 
 
+def _coerce_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+
+    if isinstance(value, (int, float)):
+        return datetime.utcnow() + timedelta(seconds=float(value))
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError('Reminder time cannot be empty.')
+        if text.endswith('Z'):
+            text = text[:-1] + '+00:00'
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise ValueError('Invalid reminder time. Use ISO format, e.g. 2025-09-26T18:30.') from exc
+        if dt.tzinfo:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+
+    raise ValueError('Unsupported reminder time format.')
+
+
 def _decode_base64_audio(value: str) -> bytes:
     if not isinstance(value, str) or not value.strip():
         raise ValueError('Audio payload missing.')
@@ -590,6 +625,8 @@ def _assistant_offline_payload(message: str) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         'status': 'offline',
         'message': message,
+        'assistant_mode': ASSISTANT_MODE,
+        'reminders_supported': False,
     }
     if assistant_init_error:
         payload['details'] = assistant_init_error
@@ -708,6 +745,112 @@ class VoiceNoteManager:
             self._timers.clear()
 
 
+@dataclass
+class LocalReminder:
+    id: str
+    message: str
+    remind_at: datetime
+    created_at: datetime
+    voice_note: Optional[str] = None
+    delivered: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'message': self.message,
+            'remind_at': self.remind_at.isoformat(),
+            'created_at': self.created_at.isoformat(),
+            'voice_note': self.voice_note,
+            'delivered': self.delivered,
+        }
+
+
+class LocalReminderScheduler:
+    def __init__(self, voice_manager: VoiceNoteManager, speak_callback: Callable[[str, bool], bool]) -> None:
+        self._voice_manager = voice_manager
+        self._speak_callback = speak_callback
+        self._reminders: Dict[str, LocalReminder] = {}
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name='PiReminderScheduler', daemon=True)
+        self._thread.start()
+
+    def add_reminder(self, message: str, remind_at: datetime, *, voice_note: Optional[str] = None) -> Dict[str, Any]:
+        reminder = LocalReminder(
+            id=str(uuid.uuid4()),
+            message=message.strip(),
+            remind_at=remind_at,
+            created_at=datetime.utcnow(),
+            voice_note=(voice_note.strip() if voice_note else None),
+        )
+        with self._lock:
+            self._reminders[reminder.id] = reminder
+            self._event.set()
+        return reminder.to_dict()
+
+    def remove_reminder(self, reminder_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            reminder = self._reminders.pop(reminder_id, None)
+            if reminder:
+                self._event.set()
+            return reminder.to_dict() if reminder else None
+
+    def list_reminders(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            reminders = sorted(self._reminders.values(), key=lambda item: item.remind_at)
+            return [item.to_dict() for item in reminders]
+
+    def shutdown(self) -> None:
+        self._stop.set()
+        self._event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+
+    def _due_reminder(self) -> Optional[LocalReminder]:
+        with self._lock:
+            pending = [item for item in self._reminders.values() if not item.delivered]
+            if not pending:
+                return None
+            return min(pending, key=lambda item: item.remind_at)
+
+    def _mark_delivered(self, reminder_id: str) -> Optional[LocalReminder]:
+        with self._lock:
+            reminder = self._reminders.get(reminder_id)
+            if reminder:
+                reminder.delivered = True
+            return reminder
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            reminder = self._due_reminder()
+            if reminder is None:
+                self._event.wait(timeout=60)
+                self._event.clear()
+                continue
+
+            now = datetime.utcnow()
+            delay = (reminder.remind_at - now).total_seconds()
+            if delay > 0:
+                triggered = self._event.wait(timeout=min(delay, 60))
+                if triggered:
+                    self._event.clear()
+                continue
+
+            delivered = self._mark_delivered(reminder.id)
+            if not delivered:
+                continue
+
+            announcement = delivered.voice_note or delivered.message
+            try:
+                if announcement:
+                    self._voice_manager.enqueue_text(announcement, 0.0)
+                else:
+                    self._speak_callback('Reminder due.', True)
+            finally:
+                self._event.set()
+
+
 def _extract_voice_note_payload() -> Tuple[Optional[bytes], Optional[str], Optional[str], float, Optional[str]]:
     if request.files:
         file_storage = next(iter(request.files.values()))
@@ -769,6 +912,8 @@ voice_note_manager = VoiceNoteManager(
     lambda text, async_mode=True: speak_text(text, async_mode),
 )
 
+reminder_scheduler: Optional[LocalReminderScheduler] = None
+
 if VoiceChatbotService is not None:
     try:
         assistant_service = VoiceChatbotService()
@@ -787,16 +932,25 @@ else:
 
 if assistant_service is None:
     fallback_speaker = PiFallbackSpeaker()
+    reminder_scheduler = LocalReminderScheduler(voice_note_manager, lambda text, async_mode=True: speak_text(text, async_mode))
 else:
     fallback_speaker = None
 
 @app.route('/assistant/status', methods=['GET'])
 def assistant_status():
     if assistant_service is None:
-        payload = _assistant_offline_payload('Voice assistant not available on Pi.')
-        payload['voice_ready'] = bool(fallback_speaker and fallback_speaker.ready)
-        payload['speaker_only'] = bool(payload['voice_ready'])
-        status_code = 200 if payload['voice_ready'] else 503
+        voice_ready = bool(fallback_speaker and fallback_speaker.ready)
+        reminders_supported = reminder_scheduler is not None
+        message = 'Speaker-only mode active; GitHub assistant disabled.' if voice_ready else 'No speech engine available on Pi.'
+        payload = {
+            'status': 'speaker_only' if voice_ready else 'offline',
+            'voice_ready': voice_ready,
+            'speaker_only': voice_ready,
+            'assistant_mode': ASSISTANT_MODE,
+            'reminders_supported': reminders_supported,
+            'message': message,
+        }
+        status_code = 200 if voice_ready or reminders_supported else 503
         return jsonify(payload), status_code
 
     try:
@@ -900,15 +1054,19 @@ def assistant_reminders():
     if request.method == 'OPTIONS':
         return ('', 204)
 
-    if assistant_service is None:
-        return jsonify(_assistant_offline_payload('Voice assistant not available on Pi.')), 503
+    if assistant_service is None and reminder_scheduler is None:
+        payload = _assistant_offline_payload('Reminder service not available on Pi.')
+        return jsonify(payload), 503
 
     if request.method == 'GET':
-        try:
-            reminders = assistant_service.list_reminders()
-        except Exception as exc:  # pragma: no cover - external dependency
-            logger.error('❌ Assistant reminder fetch error: %s', exc)
-            return jsonify({'status': 'error', 'message': 'Failed to fetch reminders'}), 500
+        if assistant_service is not None:
+            try:
+                reminders = assistant_service.list_reminders()
+            except Exception as exc:  # pragma: no cover - external dependency
+                logger.error('❌ Assistant reminder fetch error: %s', exc)
+                return jsonify({'status': 'error', 'message': 'Failed to fetch reminders'}), 500
+        else:
+            reminders = reminder_scheduler.list_reminders() if reminder_scheduler else []
         return jsonify({'status': 'success', 'reminders': reminders})
 
     data = request.get_json(force=True, silent=True) or {}
@@ -922,12 +1080,29 @@ def assistant_reminders():
         if delay_seconds is None and delay_minutes is not None:
             delay_seconds = float(delay_minutes) * 60.0
 
-        reminder = assistant_service.add_reminder(
-            message,
-            remind_at=remind_at,
-            delay_seconds=None if delay_seconds is None else float(delay_seconds),
-            voice_note=voice_note,
-        )
+        if assistant_service is not None:
+            reminder = assistant_service.add_reminder(
+                message,
+                remind_at=remind_at,
+                delay_seconds=None if delay_seconds is None else float(delay_seconds),
+                voice_note=voice_note,
+            )
+        else:
+            if not message or not message.strip():
+                raise ValueError('Reminder message cannot be empty.')
+
+            if remind_at is not None:
+                remind_dt = _coerce_datetime(remind_at)
+            else:
+                if delay_seconds is None:
+                    delay_seconds = 60.0
+                remind_dt = datetime.utcnow() + timedelta(seconds=float(delay_seconds))
+
+            reminder = reminder_scheduler.add_reminder(
+                message.strip(),
+                remind_dt,
+                voice_note=voice_note,
+            )
     except ValueError as exc:
         return jsonify({'status': 'error', 'message': str(exc)}), 400
     except Exception as exc:  # pragma: no cover - external dependency
@@ -942,11 +1117,15 @@ def assistant_delete_reminder(reminder_id: str):
     if request.method == 'OPTIONS':
         return ('', 204)
 
-    if assistant_service is None:
-        return jsonify(_assistant_offline_payload('Voice assistant not available on Pi.')), 503
+    if assistant_service is None and reminder_scheduler is None:
+        payload = _assistant_offline_payload('Reminder service not available on Pi.')
+        return jsonify(payload), 503
 
     try:
-        removed = assistant_service.remove_reminder(reminder_id)
+        if assistant_service is not None:
+            removed = assistant_service.remove_reminder(reminder_id)
+        else:
+            removed = reminder_scheduler.remove_reminder(reminder_id) if reminder_scheduler else None
     except Exception as exc:  # pragma: no cover - external dependency
         logger.error('❌ Assistant reminder delete error: %s', exc)
         return jsonify({'status': 'error', 'message': 'Failed to delete reminder'}), 500
@@ -1299,6 +1478,11 @@ if __name__ == '__main__':
             audio_queue.shutdown()
         except Exception:
             pass
+        if reminder_scheduler is not None:
+            try:
+                reminder_scheduler.shutdown()
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug('Reminder scheduler shutdown warning: %s', exc)
         if assistant_service is not None:
             try:
                 assistant_service.shutdown()
