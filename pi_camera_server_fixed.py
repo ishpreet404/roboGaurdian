@@ -69,10 +69,23 @@ class PiCameraServer:
         self.frame_lock = threading.Lock()
         
         # Camera settings (optimized for low latency)
-        self.frame_width = 1080  # Reduced from 640 for faster processing
-        self.frame_height = 1920  # Reduced from 480 for faster processing
-        self.fps = 30  # Reduced from 30 to lower bandwidth and processing load
-        self.jpeg_quality = 100  # Reduced from 80 for faster encoding
+        self.frame_width = 1280   # Target 720p HD stream width
+        self.frame_height = 720   # Target 720p HD stream height
+        self.fps = 30             # Maintain smoother 30 FPS
+        self.jpeg_quality = 60    # Lower quality for smaller payloads → less latency
+        self.capture_flush_frames = 2  # Drop buffered frames to keep stream real-time
+        self.capture_retry_delay = 0.02
+        self.last_frame_timestamp = 0
+        self.encode_params = self._build_encode_params()
+
+        # Boost OpenCV performance on constrained hardware
+        try:
+            cv2.setUseOptimized(True)
+            if hasattr(cv2, "setNumThreads"):
+                target_threads = min(4, max(1, os.cpu_count() or 1))
+                cv2.setNumThreads(target_threads)
+        except Exception as opt_err:
+            logger.debug(f"OpenCV optimization tuning skipped: {opt_err}")
         
         # Statistics
         self.commands_received = 0
@@ -138,7 +151,7 @@ class PiCameraServer:
                                 
                                 # Set basic properties first
                                 self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-                                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
+                                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
                                 self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
                                 
                                 # Test camera capture multiple times (sometimes first read fails)
@@ -209,18 +222,39 @@ class PiCameraServer:
                 ret, frame = self.camera.read()
                 
                 if ret:
+                    # Drop any stale buffered frames to minimize latency
+                    flushed = 0
+                    while flushed < self.capture_flush_frames and self.camera:
+                        if not self.camera.grab():
+                            break
+                        ret_flush, flush_frame = self.camera.retrieve()
+                        if not ret_flush:
+                            break
+                        frame = flush_frame
+                        flushed += 1
+
                     # Store frame thread-safely
                     with self.frame_lock:
-                        self.current_frame = frame.copy()
+                        self.current_frame = frame
+                        self.last_frame_timestamp = time.time()
                 else:
                     logger.warning("⚠️ Failed to capture frame")
-                    time.sleep(0.1)
+                    time.sleep(self.capture_retry_delay)
                     
             except Exception as e:
                 logger.error(f"❌ Camera capture error: {e}")
-                time.sleep(0.5)
+                time.sleep(self.capture_retry_delay * 2)
                 
         logger.info("📹 Camera capture loop stopped")
+
+    def _build_encode_params(self):
+        params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+        if hasattr(cv2, 'IMWRITE_JPEG_LUMA_QUALITY'):
+            params.extend([cv2.IMWRITE_JPEG_LUMA_QUALITY, self.jpeg_quality])
+        if hasattr(cv2, 'IMWRITE_JPEG_CHROMA_QUALITY'):
+            chroma_quality = max(10, self.jpeg_quality - 15)
+            params.extend([cv2.IMWRITE_JPEG_CHROMA_QUALITY, chroma_quality])
+        return params
         
     def generate_video_stream(self):
         """Generate MJPEG video stream"""
@@ -230,13 +264,12 @@ class PiCameraServer:
             # Get current frame
             with self.frame_lock:
                 if self.current_frame is not None:
-                    frame = self.current_frame.copy()
+                    frame = self.current_frame
                     
             if frame is not None:
                 try:
                     # Encode frame as JPEG
-                    encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
-                    ret, buffer = cv2.imencode('.jpg', frame, encode_params)
+                    ret, buffer = cv2.imencode('.jpg', frame, self.encode_params)
                     
                     if ret:
                         frame_bytes = buffer.tobytes()
@@ -255,7 +288,8 @@ class PiCameraServer:
                     
             else:
                 # No frame available, send placeholder with lower latency
-                time.sleep(0.066)  # ~15 FPS fallback (matches camera fps)
+                fallback_delay = 1.0 / self.fps if self.fps else self.capture_retry_delay
+                time.sleep(fallback_delay)
                 
     def send_uart_command(self, command):
         """Send command to ESP32 via UART"""
@@ -561,9 +595,10 @@ def video_feed():
         server.generate_video_stream(),
         mimetype='multipart/x-mixed-replace; boundary=frame',
         headers={
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
             'Pragma': 'no-cache',
-            'Expires': '0'
+            'Expires': '0',
+            'X-Accel-Buffering': 'no'
         }
     )
 
