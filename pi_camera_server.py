@@ -57,8 +57,8 @@ class PiCameraServer:
         self.frame_lock = threading.Lock()
         
         # Camera settings (optimized for 1080p streaming)
-        self.frame_width = 1920   # Full 1080p width
-        self.frame_height = 1080  # Full 1080p height
+        self.frame_width = 1280   # Full 1080p width
+        self.frame_height = 720  # Full 1080p height
         self.fps = 60             # Standard 30 FPS for stability
         self.jpeg_quality = 45    # Lower quality for better performance with higher resolution
         
