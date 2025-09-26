@@ -65,11 +65,11 @@ class PiCameraServer:
         self.current_frame = None
         self.frame_lock = threading.Lock()
         
-        # Camera settings (optimized for streaming)
-        self.frame_width = 640
-        self.frame_height = 480
-        self.fps = 30
-        self.jpeg_quality = 80
+        # Camera settings (optimized for low latency)
+        self.frame_width = 320  # Reduced from 640 for faster processing
+        self.frame_height = 240  # Reduced from 480 for faster processing
+        self.fps = 21  # Reduced from 30 to lower bandwidth and processing load
+        self.jpeg_quality = 50  # Reduced from 80 for faster encoding
         
         # Statistics
         self.commands_received = 0
@@ -120,11 +120,14 @@ class PiCameraServer:
             if not self.camera.isOpened():
                 raise Exception("No camera found - check camera connection")
                 
-            # Set optimized camera properties for robot streaming
+            # Set optimized camera properties for ultra-low latency
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height) 
             self.camera.set(cv2.CAP_PROP_FPS, self.fps)
             self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering for low latency
+            # Additional low-latency optimizations
+            self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))  # Use MJPEG for faster capture
+            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Disable auto-exposure for consistent timing
             
             # Test camera
             ret, test_frame = self.camera.read()
@@ -196,8 +199,8 @@ class PiCameraServer:
                     logger.error(f"❌ Frame encoding error: {e}")
                     
             else:
-                # No frame available, send placeholder
-                time.sleep(0.033)  # ~30 FPS fallback
+                # No frame available, send placeholder with lower latency
+                time.sleep(0.066)  # ~15 FPS fallback (matches camera fps)
                 
     def send_uart_command(self, command):
         """Send command to ESP32 via UART"""
@@ -215,7 +218,7 @@ class PiCameraServer:
             start_time = time.time()
             response = ""
             
-            while time.time() - start_time < 0.5:  # 500ms timeout for ESP32 response
+            while time.time() - start_time < 0.1:  # Reduced to 100ms timeout for faster response
                 if self.uart.in_waiting > 0:
                     try:
                         response = self.uart.readline().decode('utf-8', errors='ignore').strip()
