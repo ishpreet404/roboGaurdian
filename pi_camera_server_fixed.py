@@ -69,10 +69,10 @@ class PiCameraServer:
         self.frame_lock = threading.Lock()
         
         # Camera settings (optimized for low latency)
-        self.frame_width = 320  # Reduced from 640 for faster processing
-        self.frame_height = 240  # Reduced from 480 for faster processing
-        self.fps = 21  # Reduced from 30 to lower bandwidth and processing load
-        self.jpeg_quality = 50  # Reduced from 80 for faster encoding
+        self.frame_width = 1080  # Reduced from 640 for faster processing
+        self.frame_height = 1920  # Reduced from 480 for faster processing
+        self.fps = 30  # Reduced from 30 to lower bandwidth and processing load
+        self.jpeg_quality = 100  # Reduced from 80 for faster encoding
         
         # Statistics
         self.commands_received = 0
