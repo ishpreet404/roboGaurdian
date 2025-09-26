@@ -13,11 +13,37 @@ The script leaves the original modules untouched and simply coordinates them.
 from __future__ import annotations
 
 import signal
+import sys
 import threading
 from contextlib import suppress
+from pathlib import Path
 from typing import Optional
 
-import pi_voice_chatbot_single as voice_chatbot
+ROOT = Path(__file__).resolve().parent
+_assistant_candidates = [
+    ROOT / "raspi-chatbot",
+    ROOT / "assistant",
+    ROOT,
+]
+for candidate in _assistant_candidates:
+    if candidate.exists():
+        sys.path.insert(0, str(candidate))
+
+try:
+    import pi_voice_chatbot_single as voice_chatbot  # type: ignore[import-not-found]
+except ModuleNotFoundError as exc:  # pragma: no cover - runtime safeguard
+    missing_name = getattr(exc, "name", None)
+    if missing_name and missing_name != "pi_voice_chatbot_single":
+        raise ModuleNotFoundError(
+            "pi_voice_chatbot_single dependency missing: install the required "
+            f"package '{missing_name}' (for example via 'pip install {missing_name}')."
+        ) from exc
+
+    raise ModuleNotFoundError(
+        "pi_voice_chatbot_single module not found. Ensure the voice assistant "
+        "file is located in 'raspi-chatbot/' or 'assistant/' alongside this "
+        "script, or install it on the PYTHONPATH."
+    ) from exc
 
 # Importing pi_camera_server instantiates the server object immediately, which is
 # acceptable here. We only need the Flask app reference for hosting.
@@ -72,30 +98,10 @@ class PiRobotSupervisor:
     # ------------------------------------------------------------------
     def run_voice_console(self) -> None:
         print("🎙️  Initialising Chirpy voice assistant…")
-        # build_app may raise SystemExit on missing env or return either
-        # (convo_manager, speaker, disconnect_on_exit) or (convo_manager, speaker)
         try:
-            result = voice_chatbot.build_app()
-        except SystemExit as exc:  # expected when env/config is missing
+            service = voice_chatbot.build_service()
+        except Exception as exc:
             print(f"⚠️ Voice chatbot startup error: {exc}")
-            return
-        except Exception as exc:  # unexpected errors
-            print(f"⚠️ Unexpected error while initializing voice chatbot: {exc}")
-            return
-
-        # Normalize return value to (convo_manager, speaker, disconnect_on_exit)
-        disconnect_on_exit = False
-        if isinstance(result, tuple):
-            if len(result) == 3:
-                convo_manager, speaker, disconnect_on_exit = result
-            elif len(result) == 2:
-                convo_manager, speaker = result
-                disconnect_on_exit = False
-            else:
-                print("⚠️ build_app() returned unexpected number of values. Aborting voice console.")
-                return
-        else:
-            print("⚠️ build_app() did not return a tuple. Aborting voice console.")
             return
 
         intro = (
@@ -104,7 +110,7 @@ class PiRobotSupervisor:
             "कमान्ड: 'exit' या Ctrl+C से बाहर निकलें।"
         )
         print(f"Assistant: {intro}")
-        speaker.speak(voice_chatbot._prepare_for_speech(intro))
+        service.speak_async(intro)
 
         try:
             while not self._stop_event.is_set():
@@ -119,19 +125,22 @@ class PiRobotSupervisor:
                     continue
 
                 try:
-                    reply = convo_manager.process_input(user_input)
+                    result = service.process_text(user_input)
                 except Exception as exc:  # noqa: BLE001 - surface helpful error
                     print(f"🚨 GitHub Models API error: {exc}")
                     continue
 
+                reply = result.get("reply", "") if isinstance(result, dict) else ""
+                if not reply:
+                    print("⚠️ Voice chatbot returned an empty reply.")
+                    continue
+
                 print(f"Assistant: {reply}")
-                speaker.speak(voice_chatbot._prepare_for_speech(reply))
         except KeyboardInterrupt:
             print("\n🔚 Keyboard interrupt received. Shutting down supervisor…")
         finally:
-            if disconnect_on_exit:
-                speaker.disconnect()
-            speaker._engine.stop()  # type: ignore[attr-defined]
+            with suppress(Exception):
+                service.shutdown()
 
     # ------------------------------------------------------------------
     # Orchestration entry point

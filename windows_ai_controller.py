@@ -18,6 +18,7 @@ Author: Robot Guardian System
 Date: September 2025
 """
 
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 import cv2
@@ -44,9 +45,10 @@ logger = logging.getLogger(__name__)
 class WindowsAIController:
     def __init__(self):
         # ⚠️ UPDATE THESE URLs WITH YOUR PI ⚠️
-        self.PI_BASE_URL = "http://192.168.27.192:5000"  # Updated Pi IP from error log
-        # OR use tunnel URL:
-        # self.PI_BASE_URL = "https://your-tunnel-url.serveo.net"
+        self.PI_BASE_URL = "http://192.168.27.192:5000"  # Updated by set_pi_server_url.py
+        env_pi_url = os.getenv("WINDOWS_PI_BASE_URL")
+        if env_pi_url:
+            self.PI_BASE_URL = env_pi_url.rstrip("/")
         
         # GUI setup
         self.root = tk.Tk()
@@ -1312,7 +1314,8 @@ class WindowsAIController:
                 self.register_manual_alert('Edumate prompt delivered', prompt_text, level='info')
             else:
                 self.register_manual_alert('Edumate prompt failed', prompt_text, level='warning')
-                mode_summary = f"⚠️ Edumate पाठ भेजने में समस्या आयी: {prompt_text}" if not summary else mode_summary
+                if not summary:
+                    mode_summary = f"⚠️ Edumate lesson delivery failed: {prompt_text}"
 
         self._sync_mode_to_pi(
             mode=self.operating_mode,
@@ -1362,15 +1365,15 @@ class WindowsAIController:
     def _mode_summary_for(self, mode: str, metadata: dict | None = None, previous: str | None = None) -> str:
         metadata = metadata or {}
         if mode == 'care_companion':
-            return "💞 मोड अपडेट: सिस्टम अब 'Care Companion' मोड में है—मित्रवत रिमाइंडर और बातचीत सक्रिय हैं।"
+            return "💞 Mode update: 'Care Companion' mode is active—friendly reminders and conversation are ready."
         if mode == 'watchdog':
-            return "🛡️ मोड अपडेट: 'Watchdog' निगरानी मोड सक्रिय है। हलचल मिलते ही तेज अलार्म बजेगा।"
+            return "🛡️ Mode update: 'Watchdog' security mode is active. A loud alarm will sound if motion is detected."
         if mode == 'edumate':
             prompt = metadata.get('prompt') or metadata.get('last_prompt')
             if prompt:
                 clean_prompt = (prompt[:140] + '…') if len(prompt) > 140 else prompt
-                return f"📚 मोड अपडेट: 'Edumate' सीखने वाला मोड सक्रिय। नया पाठ: {clean_prompt}"
-            return "📚 मोड अपडेट: 'Edumate' सीखने वाला मोड सक्रिय है। परिवार के पाठ तुरंत चलेंगे।"
+                return f"📚 Mode update: 'Edumate' learning mode active. Latest lesson: {clean_prompt}"
+            return "📚 Mode update: 'Edumate' learning mode is active. Family lessons will play immediately."
         return f"ℹ️ Mode changed to {mode}"
 
     def _sync_mode_to_pi(self, *, mode: str | None = None, metadata: dict | None = None, summary: str | None = None, speak: bool = False, watchdog_alarm_active: bool | None = None) -> None:
@@ -1419,7 +1422,7 @@ class WindowsAIController:
             self._last_watchdog_alert = timestamp
             self.register_manual_alert(
                 'Watchdog alert',
-                'कक्ष में हलचल मिली—अलार्म सक्रिय है।',
+                'Movement detected — alarm sounding.',
                 level='danger',
             )
             with self.mode_lock:
@@ -1430,7 +1433,7 @@ class WindowsAIController:
                 self._last_watchdog_alert = timestamp
                 self.register_manual_alert(
                     'Watchdog ongoing',
-                    'निगरानी अलार्म अभी भी बज रहा है।',
+                    'Security alarm still active.',
                     level='warning',
                 )
             self._start_watchdog_alarm()
@@ -1438,7 +1441,7 @@ class WindowsAIController:
             if self._watchdog_person_present:
                 self.register_manual_alert(
                     'Watchdog clear',
-                    'क्षेत्र साफ है। अलार्म रोका गया।',
+                    'Area clear. Alarm stopped.',
                     level='success',
                 )
             self._stop_watchdog_alarm()
@@ -1500,13 +1503,13 @@ class WindowsAIController:
         self._last_watchdog_alert = time.time()
         self.register_manual_alert(
             'Watchdog alarm silenced',
-            'डैशबोर्ड से निगरानी अलार्म बंद किया गया है।',
+            'Alarm muted from dashboard.',
             level='info',
         )
         self._sync_mode_to_pi(
             mode=None,
             metadata=self.mode_metadata,
-            summary='🕊️ Watchdog अलार्म डैशबोर्ड से शांत किया गया।',
+            summary='🕊️ Watchdog alarm silenced from dashboard.',
             watchdog_alarm_active=False,
         )
 

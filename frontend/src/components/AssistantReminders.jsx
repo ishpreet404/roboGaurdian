@@ -100,7 +100,7 @@ const AssistantReminders = ({ reminders, onCreate, onDelete, loading }) => {
             className="mt-2 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-foreground placeholder-muted outline-none transition focus:border-accent focus:bg-white/10"
             value={message}
             onChange={(event) => setMessage(event.target.value)}
-            placeholder="Example: 20 मिनट बाद पानी पिलाना है"
+            placeholder="Example: Give water in 20 minutes"
             rows={2}
           />
         </div>

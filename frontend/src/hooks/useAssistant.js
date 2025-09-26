@@ -14,8 +14,8 @@ const normaliseReminder = (reminder) => ({
 export const useAssistant = () => {
 	const { piBaseUrl, windowsBaseUrl } = useRobot();
 	const assistantBase = useMemo(
-		() => `${piBaseUrl.replace(/\/$/, "")}/assistant`,
-		[piBaseUrl]
+		() => `${windowsBaseUrl.replace(/\/$/, "")}/api/assistant`,
+		[windowsBaseUrl]
 	);
 	const modeEndpoint = useMemo(
 		() => `${windowsBaseUrl.replace(/\/$/, "")}/api/mode`,
@@ -52,6 +52,18 @@ export const useAssistant = () => {
 			}
 			if (typeof data?.watchdog_alarm_active === "boolean") {
 				setWatchdogAlarmActive(Boolean(data.watchdog_alarm_active));
+			}
+			if (Array.isArray(data?.history) && data.history.length > 0) {
+				setMessages(
+					data.history.map((item) => ({
+						role: item.role,
+						content: item.content,
+						timestamp: item.timestamp ?? null,
+					}))
+				);
+			}
+			if (Array.isArray(data?.reminders)) {
+				setReminders(data.reminders.map(normaliseReminder));
 			}
 		} catch {
 			setVoiceReady(false);
@@ -145,20 +157,28 @@ export const useAssistant = () => {
 							content: item.content,
 							timestamp: item.timestamp ?? null,
 					  }))
-					: [];
+					: [
+							{
+								role: "user",
+								content: trimmed,
+								timestamp: userMessage.timestamp,
+							},
+							replyMessage,
+					  ];
 
-				setMessages([
-					...mergedHistory,
-					{ role: "user", content: trimmed, timestamp: userMessage.timestamp },
-					replyMessage,
-				]);
+				setMessages(mergedHistory);
 
 				return replyMessage;
 			} catch (requestError) {
 				console.error("Assistant request failed", requestError);
-				setError(
-					requestError?.message || "Assistant unavailable. Please try again."
-				);
+				const serverMessage =
+					requestError?.response?.data?.message ||
+					requestError?.response?.data?.details;
+				const friendlyMessage =
+					serverMessage ||
+					requestError?.message ||
+					"Assistant unavailable. Please try again.";
+				setError(friendlyMessage);
 				setMessages((prev) => prev.filter((msg) => msg !== userMessage));
 				throw requestError;
 			} finally {

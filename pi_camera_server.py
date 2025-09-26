@@ -26,127 +26,126 @@ Date: September 2025
 
 import cv2
 import time
-import threading
-import json
-import os
-import psutil
-from datetime import datetime
-from flask import Flask, Response, request, jsonify, render_template_string
-from flask_cors import CORS
-
-try:
-    from pi_voice_chatbot_single import VoiceChatbotService
-except Exception:
-    VoiceChatbotService = None
-import serial
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
-
-class PiCameraServer:
-    def __init__(self):
-        # Hardware configuration for ESP32 UART0 communication
-        # Pi GPIO14/15 → ESP32 GPIO1/3 (UART0)
-        self.uart_port = '/dev/ttyS0'
-        self.baud_rate = 9600
-        self.uart = None
-        self.uart_connected = False
-        
-        # Camera configuration
-        self.camera = None
-        self.camera_active = False
-        self.current_frame = None
-        self.frame_lock = threading.Lock()
-        
-        # Camera settings (optimized for 1080p streaming)
-        self.frame_width = 1280   # Full 1080p width
-        self.frame_height = 720  # Full 1080p height
-        self.fps = 60             # Standard 30 FPS for stability
-        self.jpeg_quality = 45    # Lower quality for better performance with higher resolution
-        
-        # Statistics
-        self.commands_received = 0
-        self.frames_served = 0
-        self.start_time = datetime.now()
-        self.last_command_time = None
-        self.last_command = None
-        
-        self.initialize_hardware()
-        
-    def initialize_hardware(self):
-        """Initialize UART and camera"""
-        # Initialize UART for ESP32 communication
-        try:
-            self.uart = serial.Serial(
-                port=self.uart_port,
-                baudrate=self.baud_rate,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=0.5,
-                write_timeout=0.5
-            )
-            
-            # Test UART
-            self.uart.reset_input_buffer()
-            self.uart.reset_output_buffer()
-            
-            self.uart_connected = True
-            logger.info(f"✅ UART initialized on {self.uart_port} at {self.baud_rate} baud")
-            
-        except Exception as e:
-            logger.error(f"❌ UART initialization failed: {e}")
-            logger.error("   Make sure UART is enabled: sudo raspi-config → Interface Options → Serial Port")
-            self.uart_connected = False
-            
-        # Initialize camera (simplified working version)
-        try:
-            camera_backends = [
-                (cv2.CAP_V4L2, "V4L2"),     # Linux Video4Linux2 (best for Pi)
-                (cv2.CAP_GSTREAMER, "GStreamer"),  # Alternative for Pi Camera
-                (cv2.CAP_ANY, "Auto")       # Fallback to any available backend
-            ]
-            
-            self.camera = None
-            camera_found = False
-            
-            for backend, backend_name in camera_backends:
-                logger.info(f"🔍 Trying {backend_name} backend...")
-                
-                try:
-                    # Try different camera indices with current backend
-                    for camera_id in [0, 1, -1]:
-                        try:
-                            self.camera = cv2.VideoCapture(camera_id, backend)
-                            
-                            if self.camera.isOpened():
-                                logger.info(f"📹 Found camera at index {camera_id} with {backend_name}")
-                                
-                                # Set basic properties first
-                                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-                                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
-                                self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffering
-                                
-                                # Test camera capture multiple times (sometimes first read fails)
-                                for attempt in range(3):
-                                    ret, test_frame = self.camera.read()
-                                    if ret and test_frame is not None:
                                         logger.info(f"✅ Camera test successful on attempt {attempt + 1}")
-                                        camera_found = True
-                                        break
-                                    else:
-                                        logger.warning(f"⚠️ Camera test attempt {attempt + 1} failed, retrying...")
-                                        time.sleep(0.1)
-                                
-                                if camera_found:
+class PiFallbackSpeaker:
+    def __init__(self) -> None:
+        self._engine = None
+        self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        self.ready = False
+
+        if pyttsx3 is None:
+            logger.warning("🔇 pyttsx3 not installed; Pi fallback speaker disabled.")
+            return
+
+        try:
+            self._engine = pyttsx3.init()
+            self.ready = True
+            self._thread = threading.Thread(target=self._worker, name="PiSpeakerThread", daemon=True)
+            self._thread.start()
+            logger.info("🔊 Fallback speech engine ready.")
+        except Exception as exc:  # pragma: no cover - hardware specific
+            logger.error(f"❌ Failed to initialise fallback speaker: {exc}")
+            self.ready = False
+
+    def _worker(self) -> None:
+        while True:
+            text = self._queue.get()
+            if text is None:
+                break
+            if not text:
+                continue
+            try:
+                if self._engine is not None:
+                    self._engine.say(text)
+                    self._engine.runAndWait()
+            except Exception as exc:  # pragma: no cover - hardware specific
+                logger.error(f"⚠️ Fallback speaker error: {exc}")
+
+    def speak_async(self, text: str) -> bool:
+        if not self.ready or not text:
+            return False
+        self._queue.put(text)
+        return True
+
+    def shutdown(self) -> None:
+        if not self.ready:
+            return
+        self._queue.put(None)
+
+
                                     # Apply advanced optimizations after successful test
+if assistant_service is None:
+    fallback_speaker = PiFallbackSpeaker()
+
+
+class AudioPlaybackQueue:
+    def __init__(self) -> None:
+        self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, name="PiAudioQueue", daemon=True)
+        self._thread.start()
+
+    def enqueue(self, file_path: str) -> None:
+        if not file_path:
+            return
+        self._queue.put(file_path)
+
+    def shutdown(self) -> None:
+        self._queue.put(None)
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+
+    def _worker(self) -> None:
+        while True:
+            file_path = self._queue.get()
+            if file_path is None:
+                break
+            try:
+                if not _play_audio_file(file_path):
+                    logger.error("� Audio playback failed for %s", file_path)
+            finally:
+                try:
+                    os.remove(file_path)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:  # pragma: no cover - filesystem specific
+                    logger.warning("⚠️ Failed to remove temp audio file %s: %s", file_path, exc)
+
+
                                     try:
+    commands = []
+    extension = Path(file_path).suffix.lower()
+    if extension in {".wav", ".wave"}:
+        commands.append(["aplay", "-q", file_path])
+
+    commands.extend(
+        [
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", file_path],
+            ["mpv", "--really-quiet", file_path],
+        ]
+    )
+
+    for command in commands:
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except FileNotFoundError:
+            continue
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - playback specific
+            logger.warning("⚠️ Audio command failed (%s): %s", command[0], exc)
+            continue
+
+    logger.error("❌ No compatible audio player found for %s", file_path)
+    return False
+
+
                                         self.camera.set(cv2.CAP_PROP_FPS, self.fps)
+    suffix = Path(filename or "voice-note").suffix or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(data)
+        return temp_file.name
+
+
                                         self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
                                         self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
                                     except:
@@ -357,6 +356,7 @@ class PiCameraServer:
 server = PiCameraServer()
 
 assistant_service = None
+assistant_init_error: Optional[str] = None
 if VoiceChatbotService:
     try:
         assistant_service = VoiceChatbotService()
@@ -364,8 +364,156 @@ if VoiceChatbotService:
     except Exception as assistant_error:
         logger.error(f"❌ Voice assistant init failed: {assistant_error}")
         assistant_service = None
+        assistant_init_error = str(assistant_error)
 else:
     logger.warning("ℹ️ Voice assistant module unavailable; skipping assistant features.")
+    assistant_init_error = (
+        "Voice assistant module not available. Ensure 'pi_voice_chatbot_single.py' is present "
+        "and accessible on the PYTHONPATH."
+    )
+
+
+class PiFallbackSpeaker:
+    def __init__(self) -> None:
+        self._engine = None
+        self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        self.ready = False
+
+        if pyttsx3 is None:
+            logger.warning("🔇 pyttsx3 not installed; Pi fallback speaker disabled.")
+            return
+
+        try:
+            self._engine = pyttsx3.init()
+            self.ready = True
+            self._thread = threading.Thread(target=self._worker, name="PiSpeakerThread", daemon=True)
+            self._thread.start()
+            logger.info("🔊 Fallback speech engine ready.")
+        except Exception as exc:  # pragma: no cover - hardware specific
+def _play_audio_file(file_path: str) -> bool:
+    commands = []
+    extension = Path(file_path).suffix.lower()
+    if extension in {".wav", ".wave"}:
+        commands.append(["aplay", "-q", file_path])
+
+    commands.extend(
+        [
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", file_path],
+            ["mpv", "--really-quiet", file_path],
+        ]
+    )
+
+    for command in commands:
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except FileNotFoundError:
+            continue
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - playback specific
+            logger.warning("⚠️ Audio command failed (%s): %s", command[0], exc)
+            continue
+
+    logger.error("❌ No compatible audio player found for %s", file_path)
+    return False
+
+
+            logger.error(f"❌ Failed to initialise fallback speaker: {exc}")
+    suffix = Path(filename or "voice-note").suffix or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(data)
+        return temp_file.name
+
+
+            self.ready = False
+
+
+
+    def _worker(self) -> None:
+        while True:
+            text = self._queue.get()
+            if text is None:
+                break
+            if not text:
+                continue
+            try:
+                if self._engine is not None:
+                    self._engine.say(text)
+                    self._engine.runAndWait()
+            except Exception as exc:  # pragma: no cover - hardware specific
+                logger.error(f"⚠️ Fallback speaker error: {exc}")
+
+    def speak_async(self, text: str) -> bool:
+        if not self.ready or not text:
+            return False
+        self._queue.put(text)
+        return True
+
+    def shutdown(self) -> None:
+        if not self.ready:
+            return
+        self._queue.put(None)
+
+
+fallback_speaker: Optional[PiFallbackSpeaker] = None
+if assistant_service is None:
+    fallback_speaker = PiFallbackSpeaker()
+
+
+class AudioPlaybackQueue:
+    def __init__(self) -> None:
+        self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, name="PiAudioQueue", daemon=True)
+        self._thread.start()
+
+    def enqueue(self, file_path: str) -> None:
+        if not file_path:
+            return
+        self._queue.put(file_path)
+
+    def shutdown(self) -> None:
+        self._queue.put(None)
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+
+    def _worker(self) -> None:
+        while True:
+            file_path = self._queue.get()
+            if file_path is None:
+                break
+            try:
+                if not _play_audio_file(file_path):
+                    logger.error("🔇 Audio playback failed for %s", file_path)
+            finally:
+                try:
+                    os.remove(file_path)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:  # pragma: no cover - filesystem specific
+                    logger.warning("⚠️ Failed to remove temp audio file %s: %s", file_path, exc)
+
+
+def speak_text(text: str, async_mode: bool = True) -> bool:
+    target = assistant_service or fallback_speaker
+    if not target or not text:
+        return False
+
+    try:
+        target.speak_async(text)
+        return True
+    except Exception as exc:  # pragma: no cover - hardware specific
+        logger.error(f"⚠️ Failed to queue speech: {exc}")
+        return False
+
+
+def _assistant_offline_payload(message: str) -> dict:
+    payload = {
+        'status': 'offline',
+        'message': message,
+    }
+    if assistant_init_error:
+        payload['details'] = assistant_init_error
+    return payload
 
 VALID_MODES = {"care_companion", "watchdog", "edumate"}
 mode_state = {
@@ -377,9 +525,13 @@ mode_state = {
 }
 mode_state_lock = threading.Lock()
 
+
+
 # Flask routes
 @app.route('/')
 def index():
+
+
     """Web interface for robot control"""
     return render_template_string("""
 <!DOCTYPE html>
@@ -658,7 +810,11 @@ def get_status():
 @app.route('/assistant/status', methods=['GET'])
 def assistant_status():
     if not assistant_service:
-        return jsonify({'status': 'offline', 'voice_ready': False}), 503
+        payload = _assistant_offline_payload('Voice assistant not available')
+        payload['voice_ready'] = bool(fallback_speaker and fallback_speaker.ready)
+        payload['speaker_only'] = bool(fallback_speaker and fallback_speaker.ready)
+        status_code = 200 if payload['voice_ready'] else 503
+        return jsonify(payload), status_code
 
     try:
         status = assistant_service.status()
@@ -670,6 +826,7 @@ def assistant_status():
                 'mode_updated_at': mode_state.get('updated_at'),
                 'watchdog_alarm_active': mode_state.get('watchdog_alarm_active', False),
             })
+        status['speaker_only'] = False
         return jsonify(status)
     except Exception as exc:
         logger.error(f"❌ Assistant status error: {exc}")
@@ -745,7 +902,7 @@ def assistant_mode():
 @app.route('/assistant/message', methods=['POST'])
 def assistant_message():
     if not assistant_service:
-        return jsonify({'status': 'offline', 'message': 'Voice assistant not available'}), 503
+        return jsonify(_assistant_offline_payload('Voice assistant not available')), 503
 
     data = request.get_json(silent=True) or {}
     text = data.get('text') or data.get('message')
@@ -771,7 +928,7 @@ def assistant_message():
 @app.route('/assistant/reminders', methods=['GET', 'POST'])
 def assistant_reminders():
     if not assistant_service:
-        return jsonify({'status': 'offline', 'message': 'Voice assistant not available'}), 503
+        return jsonify(_assistant_offline_payload('Voice assistant not available')), 503
 
     if request.method == 'GET':
         try:
@@ -813,7 +970,30 @@ def assistant_reminders():
 @app.route('/assistant/reminders/<reminder_id>', methods=['DELETE'])
 def assistant_delete_reminder(reminder_id):
     if not assistant_service:
-        return jsonify({'status': 'offline', 'message': 'Voice assistant not available'}), 503
+        return jsonify(_assistant_offline_payload('Voice assistant not available')), 503
+
+
+@app.route('/assistant/speak', methods=['POST'])
+def assistant_speak():
+    data = request.get_json(silent=True) or {}
+    text = (data.get('text') or data.get('message') or '').strip()
+    async_mode = bool(data.get('async', True))
+
+    if not text:
+        return jsonify({'status': 'error', 'message': 'text is required'}), 400
+
+    if not (assistant_service or (fallback_speaker and fallback_speaker.ready)):
+        return jsonify(_assistant_offline_payload('No speech engine configured on Pi')), 503
+
+    success = speak_text(text, async_mode)
+    if not success:
+        return jsonify({'status': 'error', 'message': 'Failed to trigger speech'}), 500
+
+    with mode_state_lock:
+        mode_state['last_summary'] = text
+        mode_state['updated_at'] = datetime.utcnow().isoformat()
+
+    return jsonify({'status': 'success', 'spoken_text': text, 'async': async_mode})
 
     try:
         removed = assistant_service.remove_reminder(reminder_id)

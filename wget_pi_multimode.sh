@@ -38,8 +38,8 @@ cat > "$TARGET_DIR/README_PI.md" <<'EOF'
    cd roboguardian-pi
    python3 -m venv .venv
    source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt psutil pyserial opencv-python flask
+  pip install --upgrade pip
+  sudo apt install -y python3-psutil python3-pyserial python3-opencv python3-flask python3-flask-cors
    ```
 2. Export your GitHub Models token for the voice assistant:
    ```bash
@@ -68,7 +68,7 @@ Next steps (on the Pi):
   python3 -m venv .venv
   source .venv/bin/activate
   pip install --upgrade pip
-  pip install -r requirements.txt psutil pyserial opencv-python flask
+  sudo apt install -y python3-psutil python3-pyserial python3-opencv python3-flask python3-flask-cors
   export GITHUB_TOKEN="<github_token_with_models_access>"
   python3 pi_camera_server.py
 

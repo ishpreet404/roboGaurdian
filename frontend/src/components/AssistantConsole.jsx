@@ -57,29 +57,29 @@ const FALLBACK_MODES = [
     id: "care_companion",
     label: "Care Companion",
     description:
-      "रिमाइंडर, हल्की बातचीत और नरम सूचनाएँ सक्रिय रहती हैं।",
+      "Friendly reminders, Hindi voice support, and gentle alerts stay active.",
   },
   {
     id: "watchdog",
     label: "Watchdog",
     description:
-      "सुरक्षा चौकसी: कोई हरकत मिलते ही तेज़ अलार्म बजता है।",
+      "Security sweep: sounds a loud alarm as soon as motion is detected.",
   },
   {
     id: "edumate",
     label: "Edumate",
     description:
-      "माता-पिता के चुने हुए हिंदी पाठ और गतिविधियाँ सुनाई जाती हैं।",
+      "Parents broadcast Hindi lessons and activities while the robot listens.",
   },
 ];
 
 const MODE_TIPS = {
   care_companion:
-    "Care Companion मोड में मित्रवत बातचीत और दैनिक याद दिलाने वाली सूचनाएँ चालू रहती हैं।",
+    "Care Companion keeps casual conversation and daily reminders running.",
   watchdog:
-    "Watchdog मोड में रोबोट स्थिर रहता है और लगातार निगरानी कर अलार्म बजाता है।",
+    "Watchdog keeps the robot stationary while it scans and sounds alarms on motion.",
   edumate:
-    "Edumate मोड में आप पाठ भेजते ही Chirpy उसे ज़ोर से पढ़कर सुनाता है।",
+    "Edumate reads lessons aloud in Hindi the moment you send them.",
 };
 
 const AssistantConsole = ({
@@ -204,7 +204,7 @@ const AssistantConsole = ({
 
         {normalizedMode === "edumate" && latestLesson && (
           <div className="mt-3 rounded-xl border border-accent/30 bg-accent/10 px-3 py-2 text-xs text-accent">
-            <p className="font-semibold">नवीनतम पाठ</p>
+            <p className="font-semibold">Latest lesson</p>
             <p className="mt-1 text-foreground/90">{latestLesson}</p>
             {lessonTimeLabel && (
               <p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-muted">
@@ -217,7 +217,7 @@ const AssistantConsole = ({
         {watchdogAlarmActive && (
           <div className="mt-3 flex flex-col gap-2 rounded-xl border border-danger/40 bg-danger/10 px-3 py-3 text-danger sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              अलार्म बज रहा है!
+              Alarm is ringing!
             </span>
             <button
               type="button"
@@ -225,7 +225,7 @@ const AssistantConsole = ({
               disabled={updatingMode}
               className="rounded-full bg-danger px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-danger/90 disabled:opacity-60"
             >
-              अलार्म बंद करें
+              Silence alarm
             </button>
           </div>
         )}
@@ -249,7 +249,7 @@ const AssistantConsole = ({
               animate={{ opacity: 0.7 }}
               className="rounded-xl border border-dashed border-white/10 bg-white/5 p-6 text-center text-sm text-muted"
             >
-              Assistant idle. Say "नमस्ते" to begin in Hindi.
+              Assistant idle. Say "Namaste" to begin speaking in Hindi.
             </motion.div>
           ) : (
             messages.map((message, index) => (
@@ -279,7 +279,7 @@ const AssistantConsole = ({
           className="min-h-[96px] w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-foreground placeholder-muted outline-none transition focus:border-accent focus:bg-white/10"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="हिंदी में अपना संदेश लिखें..."
+          placeholder="Write your Hindi message here..."
         />
         <motion.button
           type="submit"

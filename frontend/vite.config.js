@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
 		plugins: [react()],
 		define: {
 			__PI_API__: JSON.stringify(
-				env.VITE_PI_API_BASE || "http://192.168.1.12:5000"
+				env.VITE_PI_API_BASE || "http://192.168.27.192:5000"
 			),
 			__WINDOWS_API__: JSON.stringify(
 				env.VITE_WINDOWS_API_BASE || "http://localhost:5050"

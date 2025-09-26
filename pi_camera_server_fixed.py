@@ -24,20 +24,39 @@ Author: Robot Guardian System
 Date: September 2025
 """
 
-import cv2
-import time
-import threading
+import base64
 import json
+import logging
 import os
+import queue
+import subprocess
+import tempfile
+import threading
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple, List
+
+import cv2
 import psutil
-from datetime import datetime
 from flask import Flask, Response, request, jsonify, render_template_string
 try:
     import serial
 except ImportError:
     print("⚠️ pyserial not installed. Install with: pip3 install pyserial")
     serial = None
-import logging
+try:
+    import pyttsx3  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional dependency
+    pyttsx3 = None
+
+try:
+    from pi_voice_chatbot_single import VoiceChatbotService, _prepare_for_speech  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - optional dependency
+    VoiceChatbotService = None  # type: ignore[assignment]
+
+    def _prepare_for_speech(text: str) -> str:  # type: ignore[override]
+        return text
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -379,8 +398,582 @@ class PiCameraServer:
             logger.error(f"❌ Status error: {e}")
             return {'status': 'error', 'message': str(e)}
 
-# Global server instance
+# ---------------------------------------------------------------------------
+# Audio playback and assistant helpers
+# ---------------------------------------------------------------------------
+_AUDIO_SUFFIX_MAP = {
+    'audio/wav': '.wav',
+    'audio/x-wav': '.wav',
+    'audio/wave': '.wav',
+    'audio/mpeg': '.mp3',
+    'audio/mp3': '.mp3',
+    'audio/ogg': '.ogg',
+    'audio/webm': '.webm',
+    'audio/mp4': '.m4a',
+}
+
+
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        return float(text)
+    return None
+
+
+def _parse_delay_values(*, seconds_value: Any = None, minutes_value: Any = None) -> float:
+    seconds = _coerce_optional_float(seconds_value)
+    minutes = _coerce_optional_float(minutes_value)
+    if seconds is not None:
+        delay = seconds
+    elif minutes is not None:
+        delay = minutes * 60.0
+    else:
+        delay = 0.0
+    if delay < 0:
+        raise ValueError('Delay must be non-negative.')
+    return delay
+
+
+def _decode_base64_audio(value: str) -> bytes:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('Audio payload missing.')
+    stripped = value.strip()
+    if stripped.startswith('data:'):
+        _, _, stripped = stripped.partition(',')
+    try:
+        return base64.b64decode(stripped, validate=True)
+    except Exception as exc:  # pragma: no cover - validation specific
+        raise ValueError('Invalid base64 audio payload.') from exc
+
+
+def _determine_suffix(filename: Optional[str], content_type: Optional[str]) -> str:
+    if filename:
+        suffix = Path(filename).suffix
+        if suffix:
+            return suffix
+    if content_type:
+        key = content_type.split(';', 1)[0].strip().lower()
+        return _AUDIO_SUFFIX_MAP.get(key, '.wav')
+    return '.wav'
+
+
+def _write_temp_audio(data: bytes, filename: Optional[str], content_type: Optional[str]) -> str:
+    suffix = _determine_suffix(filename, content_type)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(data)
+        temp_path = temp_file.name
+    logger.debug('💾 Stored voice note at %s', temp_path)
+    return temp_path
+
+
+def _play_audio_file(file_path: str) -> bool:
+    commands = []
+    extension = Path(file_path).suffix.lower()
+    if extension in {'.wav', '.wave'}:
+        commands.append(['aplay', '-q', file_path])
+
+    commands.extend(
+        [
+            ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', file_path],
+            ['mpv', '--really-quiet', file_path],
+        ]
+    )
+
+    for command in commands:
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except FileNotFoundError:
+            continue
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - playback specific
+            logger.warning('⚠️ Audio command failed (%s): %s', command[0], exc)
+            continue
+
+    logger.error('❌ No compatible audio player found for %s', file_path)
+    return False
+
+
+class AudioPlaybackQueue:
+    def __init__(self) -> None:
+        self._queue: 'queue.Queue[Optional[str]]' = queue.Queue()
+        self._thread = threading.Thread(target=self._worker, name='PiAudioQueue', daemon=True)
+        self._thread.start()
+
+    def enqueue(self, file_path: str) -> None:
+        if not file_path:
+            return
+        self._queue.put(file_path)
+
+    def shutdown(self) -> None:
+        self._queue.put(None)
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+
+    def _worker(self) -> None:
+        while True:
+            file_path = self._queue.get()
+            if file_path is None:
+                break
+            try:
+                if not _play_audio_file(file_path):
+                    logger.error('🔇 Audio playback failed for %s', file_path)
+            finally:
+                try:
+                    os.remove(file_path)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:  # pragma: no cover - filesystem specific
+                    logger.warning('⚠️ Failed to remove temp audio file %s: %s', file_path, exc)
+
+
+class PiFallbackSpeaker:
+    def __init__(self) -> None:
+        self._engine = None
+        self._queue: 'queue.Queue[Optional[str]]' = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        self.ready = False
+
+        if pyttsx3 is None:
+            logger.warning('🔇 pyttsx3 not installed; Pi fallback speaker disabled.')
+            return
+
+        try:
+            self._engine = pyttsx3.init()
+            self.ready = True
+            self._thread = threading.Thread(target=self._worker, name='PiSpeakerThread', daemon=True)
+            self._thread.start()
+            logger.info('🔊 Fallback speech engine ready.')
+        except Exception as exc:  # pragma: no cover - hardware specific
+            logger.error('❌ Failed to initialise fallback speaker: %s', exc)
+            self.ready = False
+
+    def _worker(self) -> None:
+        while True:
+            text = self._queue.get()
+            if text is None:
+                break
+            if not text:
+                continue
+            try:
+                if self._engine is not None:
+                    self._engine.say(text)
+                    self._engine.runAndWait()
+            except Exception as exc:  # pragma: no cover - hardware specific
+                logger.error('⚠️ Fallback speaker error: %s', exc)
+
+    def speak_async(self, text: str) -> bool:
+        if not self.ready or not text:
+            return False
+        self._queue.put(text)
+        return True
+
+    def shutdown(self) -> None:
+        if not self.ready:
+            return
+        self._queue.put(None)
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+
+
+assistant_service: Optional[Any] = None
+assistant_init_error: Optional[str] = None
+fallback_speaker: Optional[PiFallbackSpeaker] = None
+
+
+def _assistant_offline_payload(message: str) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        'status': 'offline',
+        'message': message,
+    }
+    if assistant_init_error:
+        payload['details'] = assistant_init_error
+    return payload
+
+
+def speak_text(text: str, async_mode: bool = True) -> bool:
+    cleaned = (text or '').strip()
+    if not cleaned:
+        return False
+
+    if assistant_service is not None:
+        try:
+            assistant_service.speak_async(_prepare_for_speech(cleaned))
+            return True
+        except Exception as exc:  # pragma: no cover - hardware specific
+            logger.error('⚠️ Assistant speech failed: %s', exc)
+
+    if fallback_speaker is not None and fallback_speaker.ready:
+        return fallback_speaker.speak_async(cleaned)
+
+    logger.warning('🔇 No speech engine available for text playback.')
+    return False
+
+
+class VoiceNoteManager:
+    def __init__(self, playback_queue: AudioPlaybackQueue, speak_callback: Callable[[str, bool], bool]) -> None:
+        self._queue = playback_queue
+        self._speak_callback = speak_callback
+        self._timers: List[threading.Timer] = []
+        self._lock = threading.Lock()
+
+    def enqueue_audio(
+        self,
+        *,
+        data: bytes,
+        filename: Optional[str],
+        content_type: Optional[str],
+        delay_seconds: float,
+    ) -> Dict[str, Any]:
+        file_path = _write_temp_audio(data, filename, content_type)
+        scheduled_for = datetime.utcnow()
+
+        if delay_seconds <= 0:
+            self._queue.enqueue(file_path)
+            return {
+                'file_path': file_path,
+                'scheduled_for': scheduled_for.isoformat(),
+                'delayed': False,
+            }
+
+        scheduled_for += timedelta(seconds=delay_seconds)
+
+        def _play() -> None:
+            try:
+                self._queue.enqueue(file_path)
+            finally:
+                with self._lock:
+                    try:
+                        self._timers.remove(timer)
+                    except ValueError:
+                        pass
+
+        timer = threading.Timer(delay_seconds, _play)
+        timer.daemon = True
+        with self._lock:
+            self._timers.append(timer)
+        timer.start()
+
+        return {
+            'file_path': file_path,
+            'scheduled_for': scheduled_for.isoformat(),
+            'delayed': True,
+        }
+
+    def enqueue_text(self, text: str, delay_seconds: float) -> Dict[str, Any]:
+        scheduled_for = datetime.utcnow()
+        prepared = _prepare_for_speech(text)
+
+        if delay_seconds <= 0:
+            success = self._speak_callback(prepared, True)
+            return {
+                'scheduled_for': scheduled_for.isoformat(),
+                'delayed': False,
+                'success': success,
+            }
+
+        scheduled_for += timedelta(seconds=delay_seconds)
+
+        def _speak() -> None:
+            try:
+                self._speak_callback(prepared, True)
+            finally:
+                with self._lock:
+                    try:
+                        self._timers.remove(timer)
+                    except ValueError:
+                        pass
+
+        timer = threading.Timer(delay_seconds, _speak)
+        timer.daemon = True
+        with self._lock:
+            self._timers.append(timer)
+        timer.start()
+
+        return {
+            'scheduled_for': scheduled_for.isoformat(),
+            'delayed': True,
+            'success': True,
+        }
+
+    def shutdown(self) -> None:
+        with self._lock:
+            for timer in self._timers:
+                timer.cancel()
+            self._timers.clear()
+
+
+def _extract_voice_note_payload() -> Tuple[Optional[bytes], Optional[str], Optional[str], float, Optional[str]]:
+    if request.files:
+        file_storage = next(iter(request.files.values()))
+        data = file_storage.read()
+        if not data:
+            raise ValueError('Uploaded file is empty.')
+
+        delay_seconds = _parse_delay_values(
+            seconds_value=request.form.get('delay_seconds') or request.form.get('delaySeconds'),
+            minutes_value=request.form.get('delay_minutes') or request.form.get('delayMinutes'),
+        )
+
+        spoken_text = request.form.get('text') or request.form.get('message')
+        if spoken_text is not None:
+            spoken_text = spoken_text.strip() or None
+
+        return (
+            data,
+            file_storage.filename,
+            file_storage.mimetype,
+            delay_seconds,
+            spoken_text,
+        )
+
+    payload = request.get_json(force=True, silent=True) or {}
+
+    delay_seconds = _parse_delay_values(
+        seconds_value=payload.get('delay_seconds') or payload.get('delaySeconds'),
+        minutes_value=payload.get('delay_minutes') or payload.get('delayMinutes'),
+    )
+
+    audio_field = (
+        payload.get('audio')
+        or payload.get('data')
+        or payload.get('voice_note')
+        or payload.get('voiceNote')
+    )
+    filename = payload.get('filename') or payload.get('name')
+    content_type = payload.get('content_type') or payload.get('mime_type') or payload.get('mimeType')
+    spoken_text = payload.get('text') or payload.get('message')
+    if isinstance(spoken_text, str):
+        spoken_text = spoken_text.strip() or None
+
+    if audio_field:
+        audio_bytes = _decode_base64_audio(audio_field)
+        return audio_bytes, filename, content_type, delay_seconds, spoken_text
+
+    if spoken_text:
+        return None, None, None, delay_seconds, spoken_text
+
+    raise ValueError('Audio payload missing.')
+
+# Global server instance and assistant wiring
 server = PiCameraServer()
+
+audio_queue = AudioPlaybackQueue()
+voice_note_manager = VoiceNoteManager(
+    audio_queue,
+    lambda text, async_mode=True: speak_text(text, async_mode),
+)
+
+if VoiceChatbotService is not None:
+    try:
+        assistant_service = VoiceChatbotService()
+        logger.info('🎙️ Voice assistant initialised.')
+    except Exception as exc:  # pragma: no cover - external dependency
+        assistant_service = None
+        assistant_init_error = str(exc)
+        logger.error('❌ Voice assistant init failed: %s', exc)
+else:
+    assistant_service = None
+    assistant_init_error = (
+        "Voice assistant module not available. Ensure 'pi_voice_chatbot_single.py' is present "
+        'and accessible on the PYTHONPATH.'
+    )
+    logger.warning('ℹ️ Voice assistant module unavailable; skipping assistant features.')
+
+if assistant_service is None:
+    fallback_speaker = PiFallbackSpeaker()
+else:
+    fallback_speaker = None
+
+@app.route('/assistant/status', methods=['GET'])
+def assistant_status():
+    if assistant_service is None:
+        payload = _assistant_offline_payload('Voice assistant not available on Pi.')
+        payload['voice_ready'] = bool(fallback_speaker and fallback_speaker.ready)
+        payload['speaker_only'] = bool(payload['voice_ready'])
+        status_code = 200 if payload['voice_ready'] else 503
+        return jsonify(payload), status_code
+
+    try:
+        status = assistant_service.status()
+        status.update({'status': 'online', 'speaker_only': False})
+        return jsonify(status)
+    except Exception as exc:  # pragma: no cover - external dependency
+        logger.error('❌ Assistant status error: %s', exc)
+        return jsonify({'status': 'error', 'message': 'Failed to fetch assistant status'}), 500
+
+
+@app.route('/assistant/message', methods=['POST', 'OPTIONS'])
+def assistant_message():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    if assistant_service is None:
+        return jsonify(_assistant_offline_payload('Voice assistant not available on Pi.')), 503
+
+    data = request.get_json(force=True, silent=True) or {}
+    text = (data.get('text') or data.get('message') or '').strip()
+    speak = bool(data.get('speak', True))
+    history_limit = int(data.get('history_limit', 20))
+
+    if not text:
+        return jsonify({'status': 'error', 'message': 'text is required'}), 400
+
+    try:
+        result = assistant_service.process_text(text, speak_reply=speak)
+        history = assistant_service.get_history(limit=history_limit)
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - external dependency
+        logger.error('❌ Assistant message error: %s', exc)
+        return jsonify({'status': 'error', 'message': 'Assistant processing failed'}), 500
+
+    return jsonify({
+        'status': 'success',
+        'reply': result['reply'],
+        'timestamp': result['timestamp'],
+        'history': history,
+    })
+
+
+@app.route('/assistant/voice_note', methods=['POST', 'OPTIONS'])
+def assistant_voice_note():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    try:
+        audio_bytes, filename, content_type, delay_seconds, spoken_text = _extract_voice_note_payload()
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error('❌ Voice note payload error: %s', exc)
+        return jsonify({'status': 'error', 'message': 'Failed to parse voice note payload'}), 400
+
+    try:
+        if audio_bytes:
+            result = voice_note_manager.enqueue_audio(
+                data=audio_bytes,
+                filename=filename,
+                content_type=content_type,
+                delay_seconds=delay_seconds,
+            )
+            playback_id = Path(result['file_path']).name
+            response = {
+                'status': 'success',
+                'playback_mode': 'audio',
+                'queued': result['delayed'],
+                'scheduled_for': result['scheduled_for'],
+                'playback_id': playback_id,
+                'delay_seconds': delay_seconds,
+            }
+        elif spoken_text:
+            result = voice_note_manager.enqueue_text(spoken_text, delay_seconds)
+            if not result.get('success', True):
+                return jsonify({'status': 'error', 'message': 'No speaker available on Pi'}), 503
+            response = {
+                'status': 'success',
+                'playback_mode': 'text',
+                'queued': result['delayed'],
+                'scheduled_for': result['scheduled_for'],
+                'spoken_text': _prepare_for_speech(spoken_text),
+                'delay_seconds': delay_seconds,
+            }
+        else:
+            return jsonify({'status': 'error', 'message': 'Audio payload missing'}), 400
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error('❌ Voice note processing error: %s', exc)
+        return jsonify({'status': 'error', 'message': 'Failed to queue voice note'}), 500
+
+    status_code = 202 if response.get('queued') else 200
+    return jsonify(response), status_code
+
+
+@app.route('/assistant/reminders', methods=['GET', 'POST', 'OPTIONS'])
+def assistant_reminders():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    if assistant_service is None:
+        return jsonify(_assistant_offline_payload('Voice assistant not available on Pi.')), 503
+
+    if request.method == 'GET':
+        try:
+            reminders = assistant_service.list_reminders()
+        except Exception as exc:  # pragma: no cover - external dependency
+            logger.error('❌ Assistant reminder fetch error: %s', exc)
+            return jsonify({'status': 'error', 'message': 'Failed to fetch reminders'}), 500
+        return jsonify({'status': 'success', 'reminders': reminders})
+
+    data = request.get_json(force=True, silent=True) or {}
+    message = data.get('message') or data.get('text')
+    remind_at = data.get('remind_at') or data.get('time')
+    delay_seconds = data.get('delay_seconds') or data.get('delaySeconds')
+    delay_minutes = data.get('delay_minutes') or data.get('delayMinutes')
+    voice_note = data.get('voice_note') or data.get('voiceNote')
+
+    try:
+        if delay_seconds is None and delay_minutes is not None:
+            delay_seconds = float(delay_minutes) * 60.0
+
+        reminder = assistant_service.add_reminder(
+            message,
+            remind_at=remind_at,
+            delay_seconds=None if delay_seconds is None else float(delay_seconds),
+            voice_note=voice_note,
+        )
+    except ValueError as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+    except Exception as exc:  # pragma: no cover - external dependency
+        logger.error('❌ Assistant reminder create error: %s', exc)
+        return jsonify({'status': 'error', 'message': 'Failed to create reminder'}), 500
+
+    return jsonify({'status': 'success', 'reminder': reminder}), 201
+
+
+@app.route('/assistant/reminders/<reminder_id>', methods=['DELETE', 'OPTIONS'])
+def assistant_delete_reminder(reminder_id: str):
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    if assistant_service is None:
+        return jsonify(_assistant_offline_payload('Voice assistant not available on Pi.')), 503
+
+    try:
+        removed = assistant_service.remove_reminder(reminder_id)
+    except Exception as exc:  # pragma: no cover - external dependency
+        logger.error('❌ Assistant reminder delete error: %s', exc)
+        return jsonify({'status': 'error', 'message': 'Failed to delete reminder'}), 500
+
+    if not removed:
+        return jsonify({'status': 'error', 'message': 'Reminder not found'}), 404
+
+    return jsonify({'status': 'success', 'reminder': removed})
+
+
+@app.route('/assistant/speak', methods=['POST', 'OPTIONS'])
+def assistant_speak():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    data = request.get_json(force=True, silent=True) or {}
+    text = (data.get('text') or data.get('message') or '').strip()
+    async_mode = bool(data.get('async', True))
+
+    if not text:
+        return jsonify({'status': 'error', 'message': 'text is required'}), 400
+
+    if not speak_text(text, async_mode=async_mode):
+        return jsonify({'status': 'error', 'message': 'No speech engine available on Pi'}), 503
+
+    return jsonify({'status': 'success', 'spoken_text': text, 'async': async_mode})
+
 
 # Flask routes
 @app.route('/')
@@ -698,4 +1291,19 @@ if __name__ == '__main__':
             server.camera.release()
         if server.uart:
             server.uart.close()
+        try:
+            voice_note_manager.shutdown()
+        except Exception as exc:  # pragma: no cover - defensive cleanup
+            logger.debug('Voice note manager shutdown warning: %s', exc)
+        try:
+            audio_queue.shutdown()
+        except Exception:
+            pass
+        if assistant_service is not None:
+            try:
+                assistant_service.shutdown()
+            except Exception as exc:  # pragma: no cover - defensive cleanup
+                logger.debug('Assistant shutdown warning: %s', exc)
+        if fallback_speaker is not None:
+            fallback_speaker.shutdown()
         logger.info("👋 Goodbye!")
