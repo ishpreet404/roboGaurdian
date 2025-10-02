@@ -139,7 +139,7 @@ const LandingPage = () => {
                   <div className="absolute bottom-4 left-4 right-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-display font-semibold text-white">Guardian One</p>
+                        <p className="font-display font-semibold text-white">Chirpy</p>
                         <p className="text-sm text-white/80">Status: Operational</p>
                       </div>
                       <div className="flex items-center gap-2 rounded-full bg-success/20 border border-success/40 px-3 py-1">
