@@ -72,7 +72,7 @@ const LandingPage = () => {
                 <SparklesIcon className="h-8 w-8 text-white" />
               </div>
               <div>
-                <h1 className="font-display text-2xl font-bold text-foreground">Guardian One</h1>
+                <h1 className="font-display text-2xl font-bold text-foreground">Chirpy</h1>
                 <p className="text-sm text-muted">Autonomous Robot System</p>
               </div>
             </div>
@@ -100,7 +100,7 @@ const LandingPage = () => {
               </h2>
               
               <p className="text-xl text-muted leading-relaxed">
-                Experience the future of robotics with Guardian One - an intelligent autonomous system featuring 
+                Experience the future of robotics with Chirpy - an intelligent autonomous system featuring 
                 real-time vision processing, voice interaction, and seamless remote control capabilities.
               </p>
               
