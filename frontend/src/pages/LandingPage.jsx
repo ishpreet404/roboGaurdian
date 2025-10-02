@@ -94,7 +94,7 @@ const LandingPage = () => {
               </div>
               
               <h2 className="font-display text-5xl font-bold leading-tight text-foreground lg:text-6xl">
-                Meet Your
+                Meet Chirpy Your
                 <span className="bg-gradient-to-r from-accent via-info to-success bg-clip-text text-transparent"> AI-Powered </span>
                 Guardian
               </h2>
@@ -128,8 +128,8 @@ const LandingPage = () => {
               <div className="relative rounded-3xl border border-white/10 bg-card/80 p-8 shadow-2xl backdrop-blur-lg">
                 <div className="aspect-video rounded-2xl bg-gradient-to-br from-surfaceAlt to-surface border border-white/5 overflow-hidden">
                   <img
-                    src="https://images.unsplash.com/photo-1546776310-eef45dd6d63c?w=800&h=600&fit=crop&crop=center&auto=format&q=80"
-                    alt="Guardian One Robot"
+                    src="https://media.licdn.com/dms/image/v2/D5622AQE3LOhvVTnehQ/feedshare-shrink_1280/B56ZmbbXqjHQAw-/0/1759249267915?e=1762387200&v=beta&t=r27XvGaoEX9QbMp2bfMxfmJR1mzlc6_zOYkrVim2QuM"
+                    alt="Chirpy"
                     className="w-full h-full object-cover opacity-90"
                     onError={(e) => {
                       e.target.src = "https://dummyimage.com/800x600/1a1d3a/7c5cff&text=Guardian+One+Robot";
