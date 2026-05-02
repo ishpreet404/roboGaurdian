@@ -145,12 +145,12 @@ def main() -> None:
 
         payload = parse_line(raw)
         if payload:
-              payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-              telemetry = payload
+                        payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        telemetry = payload
 
-            gps = payload.get("gps", {})
-            odom = payload.get("odometry", {})
-            pose = payload.get("pose", {})
+                        gps = payload.get("gps", {})
+                        odom = payload.get("odometry", {})
+                        pose = payload.get("pose", {})
 
             speed = float(odom.get("speed_mps", 0.0))
             heading = float(pose.get("heading_deg", 0.0))
