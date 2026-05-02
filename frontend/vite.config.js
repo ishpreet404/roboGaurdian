@@ -7,11 +7,11 @@ export default defineConfig(({ mode }) => {
 	return {
 		plugins: [react()],
 		define: {
-			__PI_API__: JSON.stringify(
-				env.VITE_PI_API_BASE || "http://192.168.27.192:5000"
+			__BACKEND_HTTP__: JSON.stringify(
+				env.VITE_BACKEND_HTTP_BASE || "http://localhost:8080",
 			),
-			__WINDOWS_API__: JSON.stringify(
-				env.VITE_WINDOWS_API_BASE || "http://localhost:5050"
+			__BACKEND_WS__: JSON.stringify(
+				env.VITE_BACKEND_WS_URL || "ws://localhost:8080/ws",
 			),
 		},
 		css: {

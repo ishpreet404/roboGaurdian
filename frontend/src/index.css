@@ -8,6 +8,12 @@
 
 body {
   @apply bg-surface text-foreground font-body antialiased;
+  background-image: radial-gradient(
+      circle at top,
+      rgba(0, 245, 212, 0.1),
+      transparent 55%
+    ),
+    radial-gradient(circle at 80% 20%, rgba(255, 122, 24, 0.08), transparent 40%);
 }
 
 .gradient-ring {
@@ -22,9 +28,9 @@ body {
   border-radius: inherit;
   background: conic-gradient(
     from 90deg at 50% 50%,
-    rgba(124, 92, 255, 0.4),
-    rgba(20, 205, 255, 0.4),
-    rgba(124, 92, 255, 0.4)
+    rgba(0, 245, 212, 0.4),
+    rgba(255, 122, 24, 0.4),
+    rgba(0, 245, 212, 0.4)
   );
   filter: blur(12px);
   opacity: 0.6;

@@ -1,148 +1,121 @@
-🤖 Chirpy – AI Powered Child & Pet Monitoring Robot
+# Disaster Rescue Rover System
 
-An AI-powered person & pet-tracking robot that uses computer vision, Raspberry Pi, ESP32, and a Windows PC to provide real-time safety, companionship, and entertainment.
+A complete rescue rover stack that combines ESP32 firmware, a Raspberry Pi intelligence layer, a Go backend using Chi, and a React mission control dashboard. The rover explores, tracks its trail, detects victims, streams camera video, and reports real-time telemetry to a command center.
 
-Unlike static CCTV cameras that miss key moments, Chirpy actively follows your child or pet across the room, ensuring constant visibility and protection. With integrated voice communication, reminders, and interactive features, Chirpy is your Robot Guardian Companion.
-✨ Features
-🧠 AI & Tracking
+## Architecture
 
-    Real-time YOLOv8 person/pet detection and tracking
-    Automatic robot following with obstacle avoidance
-    Manual override controls via GUI
-    Multi-source input: live webcam, prerecorded video, or simulated movement
+- ESP32 firmware: motor control (L298N), IMU fusion (MPU6050), ultrasonic obstacle avoidance, GPS parsing (NEO-6M), and telemetry output over UART.
+- Raspberry Pi: serial bridge, path tracking with GPS drift correction, person detection, and data relay to the backend.
+- Go backend (Chi): REST API, WebSocket hub, and MJPEG camera stream proxy.
+- React frontend: mission control UI with live map, telemetry, logs, alerts, and manual controls.
 
-🎤 Communication & Voice
+## Data Flow
 
-    Two-way audio chat system (speak through Pi speaker)
-    Multi-engine Text-to-Speech (TTS) (gTTS, pyttsx3, eSpeak)
-    Smart Reminder system with voice playback
-    Voice Assistant Dashboard (/assistant) for interactive commands
+ESP32 -> Pi (serial)
+Pi -> Go (HTTP + WebSocket)
+Go -> React (WebSocket)
+React -> Go -> Pi -> ESP32 (commands)
 
-🤖 Robot Features
+## Hardware (Strict)
 
-    ESP32-powered motor control (forward, back, left, right, stop)
-    Safe-distance collision prevention with ultrasonic sensors
-    Interactive play options: laser pointer, music playback, treat dispenser
+- ESP32 DevKit V1
+- L298N motor driver
+- MPU6050 IMU
+- HC-SR04 ultrasonic sensor
+- NEO-6M GPS
+- Raspberry Pi
 
-💻 System Features
+## Repository Layout
 
-    Cross-platform Windows GUI with real-time visualization
-    Web interface to control and test the Pi server
-    Robust error handling, status logs, and system statistics
-    Extensible modular architecture
+- backend/
+  - main.go
+  - router.go
+  - websocket.go
+  - telemetry_handler.go
+  - models.go
+  - camera.go
+- frontend/
+  - src/components/MapView.jsx
+  - src/components/CameraFeed.jsx
+  - src/components/TelemetryPanel.jsx
+  - src/components/AlertsBar.jsx
+  - src/components/LogsPanel.jsx
+  - src/components/Controls.jsx
+  - src/App.jsx
+- pi/
+  - serial_reader.py
+  - path_tracker.py
+  - drift_correction.py
+  - vision.py
+  - api_client.py
+- esp32/
+  - gps.cpp
+  - imu.cpp
+  - odometry.cpp
+  - motor.cpp
+  - sonar.cpp
+  - telemetry.cpp
+  - main.ino
 
-🏗️ System Architecture
+## Setup
 
-text
+### 1) ESP32 firmware
 
- ┌─────────────────┐    HTTP API    ┌─────────────────┐    UART     ┌─────────────────┐
- │   Windows PC    │◄──────────────►│  Raspberry Pi   │◄───────────►│     ESP32       │
- │ • YOLO AI       │                │ • Camera Stream │             │ • Motor Control │
- │ • GUI Interface │                │ • HTTP Server   │             │ • Obstacle Det. │
- │ • Person Track  │                │ • UART Bridge   │             │ • Status LEDs   │
- └─────────────────┘                └─────────────────┘             └─────────────────┘
+- Install Arduino IDE and ESP32 board support.
+- Install library: TinyGPSPlus.
+- Wiring defaults used in code:
+  - Pi UART: RX=GPIO16, TX=GPIO17
+  - GPS: RX=GPIO32, TX=GPIO4
+  - Sonar: TRIG=GPIO5, ECHO=GPIO18
+  - IMU: I2C SDA=GPIO21, SCL=GPIO22
+  - L298N: IN1=GPIO27, IN2=GPIO26, IN3=GPIO25, IN4=GPIO33, ENA=GPIO14, ENB=GPIO12
+- Flash esp32/main.ino
 
-    Windows PC → Runs AI detectors, GUI, and tracking logic
-    Raspberry Pi → Streams camera, hosts Flask server, bridges commands
-    ESP32 → Drives motors, uses ultrasonic sensors for collision detection
+### 2) Raspberry Pi
 
-🔌 Hardware Components
-
-    Raspberry Pi 4B + Camera
-    ESP32 Development Board
-    L298N Motor Driver
-    HC-SR04 Ultrasonic Sensors
-    Robot Chassis with Motors & Wheels
-    Speaker for voice playback
-
-⚙️ Software & Frameworks
-
-    Python 3.8+ (OpenCV, Flask, Tkinter, NumPy, Pillow, Requests)
-    YOLOv8-lite (Ultralytics for object detection)
-    Arduino IDE (for ESP32 programming)
-    UART & Wi-Fi networking (serial commands + video streaming)
-
-🚀 Quick Start
-1️⃣ Setup ESP32
-
-bash
-
-# Upload firmware
-esp32_robot_pi_compatible.ino 
-
-# Open Serial Monitor (115200 baud) to verify
-
-2️⃣ Setup Raspberry Pi
-
-bash
-
-wget -O pi_camera_server.py https://raw.githubusercontent.com/ishpreet404/roboGaurdian/main/pi_camera_server.py
+```bash
 sudo apt update
-sudo apt install python3-opencv python3-pip
-pip3 install flask pyserial opencv-python psutil
-python3 pi_camera_server.py
+sudo apt install -y python3-pip python3-opencv
+pip3 install pyserial requests websocket-client flask ultralytics
+```
 
-Enable UART:
-sudo raspi-config → Interface Options → Serial Port → Enable
-3️⃣ Setup Windows PC
+Run the bridge (includes MJPEG stream on port 8000):
 
-bash
+```bash
+python3 pi/serial_reader.py --port /dev/serial0 --backend http://<BACKEND_IP>:8080 --ws ws://<BACKEND_IP>:8080/ws --stream
+```
 
-pip install opencv-python Pillow numpy requests ultralytics
-python windows_ai_controller.py
+### 3) Go backend
 
-4️⃣ Connect & Track
+```bash
+cd backend
+go mod tidy
+go run .
+```
 
-    Run ESP32 firmware
-    Start Pi camera server (http://PI_IP:5000)
-    Launch Windows AI controller and enter Pi IP
-    Enable Auto Person Tracking
-    Watch Chirpy follow your child/pet 🐾
+Environment options:
 
-🎮 GUI Overview
+- PORT (default 8080)
+- PI_CAMERA_STREAM_URL (default http://raspberrypi:8000/camera/stream)
+- ALLOWED_ORIGINS (comma-separated, default *)
 
-    Video Panel → Live tracking with bounding boxes & status overlays
-    Controls Panel → Select detector (Haar / SSD / YOLO), set confidence
-    Command Log → Real-time robot movement history
-    Statistics → FPS, detection status, tracking info
+### 4) React dashboard
 
-📊 Key Benefits
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-✔️ Eliminates Blind Spots: Keeps subjects in frame, unlike static cameras
-✔️ Proactive Safety: Maintains safe distances, avoids obstacles
-✔️ Interactive Engagement: Entertainment features for pets/children
-✔️ Continuous Coverage: Moves with subject across rooms
-✔️ Companionship & Well-being: Acts as safety guard + companion
-🛠️ Troubleshooting
+Optional environment overrides in frontend/.env:
 
-    Robot not moving?
-        Check ESP32 serial logs
-        Verify Pi ↔ ESP32 wiring (TX14↔RX14 / RX15↔TX15 / GND↔GND)
-        Run: python test_esp32.py PI_IP
+```
+VITE_BACKEND_HTTP_BASE=http://<BACKEND_IP>:8080
+VITE_BACKEND_WS_URL=ws://<BACKEND_IP>:8080/ws
+```
 
-    No video feed?
-        Ensure Pi camera connected
-        Check server (http://PI_IP:5000/video_feed)
+## Notes
 
-    YOLO not detecting?
-        Install: pip install ultralytics
-        Lower confidence threshold
-        Ensure lighting is sufficient
-
-🔮 Roadmap
-
-    📱 Mobile App Integration (notifications + remote control)
-    ☁️ Cloud Storage (video archiving + AI model updates)
-    👯 Multi-Subject Tracking (track multiple pets/children simultaneously)
-    🧑‍🏫 Edumate Mode (interactive learning & storytelling)
-
-📜 License
-
-MIT License – Free to use and modify for personal & educational projects.
-🤝 Contributing
-
-We welcome PRs and issues!
-
-    Add new detection models or play features
-    Improve voice assistant
-    Optimize for real-time edge computing
+- GPS fixes are fused with odometry to reduce drift; without GPS, the map shows local coordinates only.
+- Victim detection uses OpenCV HOG by default and can optionally switch to YOLO if a model is provided.
+- The MJPEG stream is proxied through the Go backend at /camera/stream.
